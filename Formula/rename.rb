@@ -3,8 +3,8 @@ class Rename < Formula
 
   desc "Keep your AI coding sessions named after what they actually became"
   homepage "https://github.com/study8677/rename"
-  url "https://github.com/study8677/rename/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "7442920caf0d9a8f20a0453104682e275a11fae4b276993495e3553b7b65125d"
+  url "https://github.com/study8677/rename/archive/refs/tags/v1.0.1.tar.gz"
+  sha256 "a184cb2bfdb7cc355eb4677a027e567d6c50d76dd82727774d90716afc587ba6"
   license "MIT"
   head "https://github.com/study8677/rename.git", branch: "main"
 
