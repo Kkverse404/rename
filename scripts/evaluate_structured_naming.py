@@ -144,6 +144,13 @@ def evaluate(
             "\u4e00" <= char <= "\u9fff" for char in decision.summary
         ):
             failures.append("Chinese evidence did not produce a Chinese summary")
+        if decision.summary and case.expected_language == "zh" and len(decision.summary) > 24:
+            failures.append("Chinese summary exceeds 24 characters")
+        if decision.summary and case.expected_language == "en":
+            if len(decision.summary.split()) > 8 or len(decision.summary) > 64:
+                failures.append("English summary exceeds 8 words or 64 characters")
+        if decision.summary and decision.summary.endswith(tuple("，、:：;；.!！?？。")):
+            failures.append("summary has trailing title punctuation")
         if decision.summary and case.required_summary_terms:
             summary = decision.summary.casefold()
             if not any(term.casefold() in summary for term in case.required_summary_terms):

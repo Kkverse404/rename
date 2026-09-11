@@ -157,12 +157,12 @@ def _finalized_registry(path):
         "thread-1",
         expected="Original",
         original="Original",
-        desired="#1-repo Stable title",
+        desired="#1- Stable title",
         module="repo",
         summary="Stable title",
         decision={"ready": True},
     )
-    registry.finalize("codex", "thread-1", observed="#1-repo Stable title")
+    registry.finalize("codex", "thread-1", observed="#1- Stable title")
     return registry
 
 
@@ -191,7 +191,7 @@ def test_naming_rollback_compares_restores_and_marks_registry(
     session = Session(
         "codex",
         "thread-1",
-        "#1-repo Stable title",
+        "#1- Stable title",
         last_active=time.time(),
         meta={"updated_at": time.time()},
     )
@@ -221,7 +221,7 @@ def test_naming_rollback_compares_restores_and_marks_registry(
 
     data = json.loads(capsys.readouterr().out)
     assert rc == 0
-    assert writer.calls == [("thread-1", "Original", "#1-repo Stable title")]
+    assert writer.calls == [("thread-1", "Original", "#1- Stable title")]
     assert data["restored_title"] == "Original"
     assert registry.get("codex", "thread-1").status == "rolled_back"
 

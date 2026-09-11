@@ -47,14 +47,13 @@ No API key required. Zero runtime dependencies. Works on macOS, Linux, and Windo
 
 Codex can use one-time structured titles. A new thread receives a machine-wide
 monotonic number, then becomes a frozen title such as
-`#631-Confidence Fix concurrent Batch Writer updates` once its task is clear.
-The mode is off by default.
+`#631- Fix concurrent updates` once its task is clear. Titles omit the project
+name and keep the summary short. The mode is off by default.
 
 ```toml
 [structured_naming]
 mode = "preview" # "off" | "preview" | "apply"
 model = "gpt-5.6-terra"
-modules = ["Confidence", "Workflow"]
 ```
 
 `preview`, `rename list`, `rename status`, and every dry-run path allocate no

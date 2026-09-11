@@ -140,12 +140,12 @@ _STRINGS = {
         "zh-Hans": "分类模型",
     },
     "settings_structured_modules": {
-        "en": "Allowed modules",
-        "zh-Hans": "允许的模块",
+        "en": "Classifier labels (not in title)",
+        "zh-Hans": "分类标签（不显示在标题）",
     },
     "settings_structured_modules_hint": {
-        "en": "Comma-separated; empty uses the project folder",
-        "zh-Hans": "逗号分隔；留空时使用项目目录名",
+        "en": "Comma-separated; empty classifies by project folder",
+        "zh-Hans": "逗号分隔；留空时按项目目录自动分类",
     },
     "settings_structured_note": {
         "en": "Preview never allocates IDs or calls a model. Apply affects only Codex; "

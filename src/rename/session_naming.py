@@ -30,6 +30,10 @@ _READY_REASONS = {"explicit_goal", "context_converged"}
 _UNCLEAR_REASONS = {"ambiguous", "insufficient_context"}
 _PREFIX_RE = re.compile(r"^\s*#\d+-")
 _MAX_TITLE_CHARS = 120
+_MAX_CJK_SUMMARY_CHARS = 24
+_MAX_NON_CJK_SUMMARY_CHARS = 64
+_MAX_NON_CJK_SUMMARY_WORDS = 8
+_TRAILING_TITLE_PUNCTUATION = " \t,，、:：;；.!！?？。"
 
 
 class NativeTitleWriter(Protocol):
@@ -128,12 +132,22 @@ def validate_naming_decision(
     return True, None
 
 
-def _format_title(display_id: int, module: str, summary: str) -> tuple[str, str]:
+def _compact_summary(summary: str) -> str:
     normalized = " ".join(summary.split())
-    prefix = f"#{display_id}-{module} "
+    if any("\u4e00" <= char <= "\u9fff" for char in normalized):
+        normalized = normalized[:_MAX_CJK_SUMMARY_CHARS]
+    else:
+        normalized = " ".join(normalized.split()[:_MAX_NON_CJK_SUMMARY_WORDS])
+        normalized = normalized[:_MAX_NON_CJK_SUMMARY_CHARS]
+    return normalized.rstrip(_TRAILING_TITLE_PUNCTUATION)
+
+
+def _format_title(display_id: int, summary: str) -> tuple[str, str]:
+    normalized = _compact_summary(summary)
+    prefix = f"#{display_id}- "
     remaining = _MAX_TITLE_CHARS - len(prefix)
     if remaining < 1:
-        raise ValueError("display ID and module leave no room for a summary")
+        raise ValueError("display ID leaves no room for a summary")
     normalized = normalized[:remaining].rstrip()
     if not normalized:
         raise ValueError("summary is empty after title bounding")
@@ -626,9 +640,7 @@ class SessionNamingWorkflow:
 
         assert decision.module is not None and decision.summary is not None
         try:
-            desired, summary = _format_title(
-                record.display_id, decision.module, decision.summary
-            )
+            desired, summary = _format_title(record.display_id, decision.summary)
         except ValueError as exc:
             data["validation_error"] = str(exc)
             self.registry.record_unclear(

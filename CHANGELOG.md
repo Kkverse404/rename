@@ -8,7 +8,7 @@ All notable changes to this project are documented here. Format loosely follows
 ### Added
 
 - Opt-in Codex structured naming with machine-wide monotonic display IDs,
-  validated `#ID-module summary` titles, permanent human-edit protection,
+  validated compact `#ID- summary` titles, permanent human-edit protection,
   explicit reopen/rollback commands, and a recovery-safe registry.
 - Config and Windows GUI controls for `off`, `preview`, and `apply` modes.
 

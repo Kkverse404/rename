@@ -136,7 +136,7 @@ def test_ready_decision_stages_writes_and_finalizes(tmp_path):
 
     record = registry.get("codex", session.id)
     assert prepared.candidate
-    assert result.renamed and result.title == "#1-repo 修复并发标题写入"
+    assert result.renamed and result.title == "#1- 修复并发标题写入"
     assert writer.writes == [(session.id, result.title, "Old")]
     assert record is not None and record.status == "finalized"
     assert [op.operation for op in registry.operations("codex", session.id)] == [
@@ -199,6 +199,29 @@ def test_ready_requires_real_evidence_and_allowed_module(tmp_path):
     assert "evidence" in result.reason
     assert writer.writes == []
     assert registry.get("codex", session.id).status == "pending"
+
+
+def test_visible_title_omits_module_and_compacts_verbose_summary(tmp_path):
+    workflow, registry, _classifier, _writer = _workflow(
+        tmp_path,
+        decision=_ready(
+            summary=(
+                "为本地 Codex 应用刚完成的结构化会话命名功能，"
+                "并先验证当前任务的真实改名结果。"
+            )
+        ),
+    )
+    session = _session()
+    workflow.prepare(session, time.time(), historical=False)
+
+    result = workflow.process(session, lambda _session: [Message("user", "应用精简标题")])
+
+    record = registry.get("codex", session.id)
+    assert result.title is not None and result.title.startswith("#1- ")
+    assert "repo" not in result.title
+    assert len(result.title.removeprefix("#1- ")) <= 24
+    assert not result.title.endswith(tuple("，、:：;；.!！?？。"))
+    assert record is not None and record.summary == result.title.removeprefix("#1- ")
 
 
 def test_writer_failure_enters_recovery_then_restart_finalizes(tmp_path):
@@ -290,7 +313,7 @@ def test_unclear_race_cannot_erase_an_already_staged_write(tmp_path):
         session.id,
         expected="Old",
         original="Old",
-        desired="#1-repo Ready",
+        desired="#1- Ready",
         module="repo",
         summary="Ready",
         decision={"ready": True},
@@ -307,7 +330,7 @@ def test_unclear_race_cannot_erase_an_already_staged_write(tmp_path):
     current = registry.get("codex", session.id)
     assert current.display_id == original.display_id
     assert current.status == "write_pending"
-    assert current.desired_title == "#1-repo Ready"
+    assert current.desired_title == "#1- Ready"
 
 
 def test_stale_discovery_snapshot_does_not_create_false_manual_override(tmp_path):
@@ -373,7 +396,7 @@ def test_restart_retries_rollback_staged_before_native_write(tmp_path):
 
 def test_same_title_rollback_intent_is_not_hidden_by_finalized_fast_path(tmp_path):
     workflow, registry, classifier, writer = _workflow(tmp_path)
-    session = _session(title="#1-repo 修复并发标题写入")
+    session = _session(title="#1- 修复并发标题写入")
     writer.title = session.title
     workflow.prepare(session, time.time(), historical=False)
     finalized = workflow.process(

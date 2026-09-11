@@ -158,8 +158,11 @@ def test_command_has_all_safety_flags_and_bounded_evidence(monkeypatch):
     assert prompt.count("answer ") < 30
     assert "user-2" in prompt
     assert "置信度" in prompt
+    assert "6-16 Chinese characters" in prompt
+    assert "Omit project/module names" in prompt
     assert prompt not in argv
     assert seen["schema"]["additionalProperties"] is False
+    assert seen["schema"]["properties"]["summary"]["maxLength"] == 64
     assert seen["kwargs"]["shell"] is False
 
 

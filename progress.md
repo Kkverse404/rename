@@ -130,3 +130,14 @@ the structured Codex naming work order.
 - The upstream remote remained fetch-only with its push URL disabled. No pull
   request, deployment, service installation, global configuration change, or
   real-thread mutation was performed.
+
+## Follow-up title refinement
+
+- The visible grammar was simplified to `#ID- summary`; project/module labels
+  remain internal validation metadata and are no longer shown in Codex titles.
+- The classifier now asks for only the current task and key object. The program
+  bounds Chinese summaries to 24 characters and other summaries to eight words
+  and 64 characters, and removes trailing title punctuation.
+- Final verification after the refinement: Ruff passed, `176 passed`,
+  `git diff --check` passed, and the live synthetic `gpt-5.6-terra` evaluation
+  passed `8/8` with concise raw summaries before program-side bounding.

@@ -5,7 +5,7 @@ machine-local, monotonic display ID to each managed Codex thread, waits until
 the task is explicit, then freezes a title in this form:
 
 ```text
-#{display_id}-{module} {summary}
+#{display_id}- {summary}
 ```
 
 The Codex thread UUID remains unchanged. The registry is global to one local
@@ -79,7 +79,7 @@ write staging, conflict handling, and recovery.
 - Concurrent allocation cannot duplicate or reuse display IDs.
 - Historical or temporarily undiscoverable threads retain their identity.
 - Ambiguous work stays pending without a title write.
-- A ready decision must pass module, evidence, summary, and reason validation;
+- A ready decision must pass internal-module, evidence, summary, and reason validation;
   model-reported confidence alone never authorizes a write.
 - A write is staged before the native title changes, read back afterward, and
   recoverable after either half of the two-store operation.

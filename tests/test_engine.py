@@ -451,7 +451,7 @@ def test_engine_routes_codex_apply_through_structured_workflow(tmp_path):
 
     record = registry.get("codex", session.id)
     assert (renamed, total) == (1, 1)
-    assert writer.writes == [(session.id, "#1-repo 实现稳定会话命名")]
+    assert writer.writes == [(session.id, "#1- 实现稳定会话命名")]
     assert classifier.calls == 1
     assert record is not None and record.status == "finalized"
 

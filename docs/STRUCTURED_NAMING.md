@@ -25,12 +25,14 @@ temporarily unavailable.
 The program, not the model, formats the final title:
 
 ```text
-#{display_id}-{module} {summary}
+#{display_id}- {summary}
 ```
 
-The module must be in the configured allowlist. If the allowlist is empty, the
-only allowed module is derived from the thread working-directory name. The
-summary is one line and cannot contain an ID/module prefix.
+The summary is a compact, single-line task title and cannot contain a managed
+ID prefix. Chinese summaries are bounded to 24 characters; other languages are
+bounded to eight words and 64 characters. Trailing title punctuation is
+removed. The validated classifier module remains internal registry metadata
+and is never included in the visible title.
 
 Codex stores two distinct values: an explicit app-server `thread.name` and a
 generated `title`/`preview` fallback. List, search, status, and the GUI display
@@ -55,9 +57,9 @@ The classifier returns one JSON object:
 }
 ```
 
-`ready` is accepted only when the module, summary, reason, and evidence all
-validate and confidence meets the configured floor. The classifier receives a
-bounded transcript excerpt and never controls the display ID, title format,
+`ready` is accepted only when the internal module, summary, reason, and evidence
+all validate and confidence meets the configured floor. The classifier receives
+a bounded transcript excerpt and never controls the display ID, title format,
 state transition, or write permission.
 
 ## State transitions

@@ -44,13 +44,12 @@ uv tool install git+https://github.com/study8677/rename.git
 ## Codex 稳定编号（可选）
 
 Codex 可以改用一次性结构化标题：新会话先取得本机全局递增编号，任务明确后写成
-`#631-Confidence 修复 Batch Writer 并发写入`，随后冻结。该模式默认关闭。
+`#631- 修复并发写入`，随后冻结。标题不包含项目名，摘要会压缩成短标题。该模式默认关闭。
 
 ```toml
 [structured_naming]
 mode = "preview" # "off" | "preview" | "apply"
 model = "gpt-5.6-terra"
-modules = ["Confidence", "Workflow"]
 ```
 
 `preview`、`rename list`、`rename status` 和所有 dry-run 路径不分配编号、不调用模型、
