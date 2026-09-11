@@ -26,8 +26,14 @@ _REGISTRY: dict[str, type[Adapter]] = {
 }
 
 
-def all_adapters() -> list[Adapter]:
-    return [cls() for cls in _REGISTRY.values()]
+def _new_adapter(cls: type[Adapter], cfg: Config | None = None) -> Adapter:
+    if cls is CodexAdapter and cfg is not None:
+        return cls(codex_home=cfg.codex_home)
+    return cls()
+
+
+def all_adapters(cfg: Config | None = None) -> list[Adapter]:
+    return [_new_adapter(cls, cfg) for cls in _REGISTRY.values()]
 
 
 def get_adapters(cfg: Config) -> list[Adapter]:
@@ -38,7 +44,7 @@ def get_adapters(cfg: Config) -> list[Adapter]:
         if cls is None:
             util.log(f"unknown tool '{name}' in config", level="warn")
             continue
-        adapter = cls()
+        adapter = _new_adapter(cls, cfg)
         if adapter.available():
             out.append(adapter)
         else:

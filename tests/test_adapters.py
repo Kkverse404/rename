@@ -71,7 +71,8 @@ def test_codex_adapter_roundtrip(tmp_path, monkeypatch):
     con = sqlite3.connect(db)
     con.execute(
         "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, rollout_path TEXT, "
-        "updated_at_ms INTEGER, cwd TEXT, archived INTEGER, first_user_message TEXT)"
+        "updated_at_ms INTEGER, created_at_ms INTEGER, cwd TEXT, archived INTEGER, "
+        "first_user_message TEXT)"
     )
     tid = "019e0000-0000-7000-8000-000000000000"
     rollout = tmp_path / "rollout.jsonl"
@@ -99,28 +100,94 @@ def test_codex_adapter_roundtrip(tmp_path, monkeypatch):
     )
     now_ms = int(time.time() * 1000)
     con.execute(
-        "INSERT INTO threads VALUES (?,?,?,?,?,?,?)",
-        (tid, "Old title", str(rollout), now_ms, "/proj", 0, "Refactor the auth module"),
+        "INSERT INTO threads VALUES (?,?,?,?,?,?,?,?)",
+        (
+            tid,
+            "Old title",
+            str(rollout),
+            now_ms,
+            now_ms - 1000,
+            "/proj",
+            0,
+            "Refactor the auth module",
+        ),
     )
     con.commit()
     con.close()
-    monkeypatch.setattr(codex, "_find_state_db", lambda: db)
-    adapter = codex.CodexAdapter()
+
+    class FakeWriter:
+        def __init__(self):
+            self.calls = []
+
+        def set_title(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    writer = FakeWriter()
+    adapter = codex.CodexAdapter(codex_home=tmp_path, writer=writer)
 
     sessions = adapter.discover(0)
     assert len(sessions) == 1
     s = sessions[0]
     assert s.id == tid and s.title == "Old title"
+    assert s.meta["created_at_ms"] == now_ms - 1000
 
     msgs = adapter.read_transcript(s)
     assert [m.role for m in msgs] == ["user", "assistant"]
     assert msgs[0].text == "Refactor the auth module"
 
     adapter.set_title(s, "Auth refactor")
+    assert writer.calls == [
+        (
+            (tid, "Auth refactor"),
+            {
+                "expected_title": "Old title",
+                "expected_updated_at": now_ms / 1000.0,
+                "expected_status": None,
+            },
+        )
+    ]
     con = sqlite3.connect(db)
     got = con.execute("SELECT title FROM threads WHERE id=?", (tid,)).fetchone()[0]
     con.close()
-    assert got == "Auth refactor"
+    assert got == "Old title"  # app-server owns writes; discovery SQLite stays read-only
+
+
+def test_codex_prefers_explicit_name_but_keeps_native_name_for_cas(tmp_path):
+    db = tmp_path / "state_5.sqlite"
+    con = sqlite3.connect(db)
+    con.execute(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT, "
+        "preview TEXT, rollout_path TEXT, updated_at_ms INTEGER, archived INTEGER)"
+    )
+    now_ms = int(time.time() * 1000)
+    con.executemany(
+        "INSERT INTO threads VALUES (?,?,?,?,?,?,?)",
+        [
+            ("named", "Generated fallback", "Explicit name", "Preview", "", now_ms, 0),
+            ("unnamed", "Generated title", None, "Preview", "", now_ms, 0),
+        ],
+    )
+    con.commit()
+    con.close()
+
+    class FakeWriter:
+        def __init__(self):
+            self.calls = []
+
+        def set_title(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+
+    writer = FakeWriter()
+    adapter = codex.CodexAdapter(codex_home=tmp_path, writer=writer)
+    sessions = {session.id: session for session in adapter.discover(0)}
+
+    assert sessions["named"].title == "Explicit name"
+    assert sessions["named"].native_title == "Explicit name"
+    assert sessions["unnamed"].title == "Generated title"
+    assert sessions["unnamed"].native_title is None
+
+    adapter.set_title(sessions["unnamed"], "Managed")
+    assert writer.calls[0][1]["expected_title"] is None
 
 
 def test_codex_skips_archived(tmp_path, monkeypatch):
@@ -137,8 +204,20 @@ def test_codex_skips_archived(tmp_path, monkeypatch):
     )
     con.commit()
     con.close()
-    monkeypatch.setattr(codex, "_find_state_db", lambda: db)
-    assert codex.CodexAdapter().discover(0) == []
+    assert codex.CodexAdapter(codex_home=tmp_path, writer=object()).discover(0) == []
+
+
+def test_codex_root_precedence(tmp_path, monkeypatch):
+    env_home = tmp_path / "env"
+    explicit_home = tmp_path / "explicit"
+    default_home = tmp_path / "user"
+    monkeypatch.setattr(codex.Path, "home", lambda: default_home)
+    monkeypatch.setenv("CODEX_HOME", str(env_home))
+
+    assert codex._codex_root(explicit_home) == explicit_home
+    assert codex._codex_root() == env_home
+    monkeypatch.delenv("CODEX_HOME")
+    assert codex._codex_root() == default_home / ".codex"
 
 
 # --------------------------------------------------------------------------- #
@@ -765,8 +844,7 @@ def test_codex_read_transcript_falls_back_when_rollout_missing(tmp_path, monkeyp
     )
     con.commit()
     con.close()
-    monkeypatch.setattr(codex, "_find_state_db", lambda: db)
-    adapter = codex.CodexAdapter()
+    adapter = codex.CodexAdapter(codex_home=tmp_path, writer=object())
     s = adapter.discover(0)[0]
     msgs = adapter.read_transcript(s)  # rollout file is gone
     assert len(msgs) == 1

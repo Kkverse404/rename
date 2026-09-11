@@ -86,12 +86,12 @@ class RenameCLI:
     def stats(self) -> dict:
         return json.loads(self._run(["stats", "--json"], timeout=60))
 
-    def rename_session(self, session_id: str, tool: str | None = None) -> None:
-        args = ["once", "--session", session_id]
+    def rename_session(self, session_id: str, tool: str | None = None) -> dict:
+        args = ["once", "--session", session_id, "--json"]
         if tool:
             args += ["--tool", tool]
         # rename can be slow (LLM call); cap at 4 minutes.
-        self._run(args, timeout=240)
+        return json.loads(self._run(args, timeout=240))
 
     def rename_historical(self, dry_run: bool = False) -> str:
         """Run a full historical rename pass — the GUI "Rename historical
@@ -137,16 +137,25 @@ class DaemonControl:
                 return True
         return self._child is not None and self._child.poll() is None
 
-    def pause(self, status: dict | None) -> None:
+    def can_pause(self, status: dict | None) -> bool:
+        """Whether this GUI can safely stop the reported daemon."""
+
+        if not sys.platform.startswith("win"):
+            return self.is_running(status)
+        return self._child is not None and self._child.poll() is None
+
+    def pause(self, status: dict | None) -> bool:
         if sys.platform == "darwin":
             self._launchctl(["unload", self._plist_path()])
-            return
+            return True
         if sys.platform.startswith("linux"):
             subprocess.run(
                 ["systemctl", "--user", "stop", "rename.service"],
                 check=False,
             )
-            return
+            return True
+        if not self.can_pause(status):
+            return False
         # Windows: kill our child, if any.
         if self._child and self._child.poll() is None:
             self._child.terminate()
@@ -155,20 +164,23 @@ class DaemonControl:
             except subprocess.TimeoutExpired:
                 self._child.kill()
         self._child = None
+        return True
 
-    def resume(self, status: dict | None) -> None:
+    def resume(self, status: dict | None) -> bool:
+        if self.is_running(status):
+            return False
         if sys.platform == "darwin":
             self._launchctl(["load", "-w", self._plist_path()])
-            return
+            return True
         if sys.platform.startswith("linux"):
             subprocess.run(
                 ["systemctl", "--user", "start", "rename.service"],
                 check=False,
             )
-            return
+            return True
         # Windows: spawn `rename run` as a foreground subprocess we own.
         if self._child and self._child.poll() is None:
-            return
+            return False
         # CREATE_NO_WINDOW = 0x08000000 (no console window)
         flags = 0
         if sys.platform == "win32":
@@ -179,6 +191,7 @@ class DaemonControl:
             stderr=subprocess.DEVNULL,
             creationflags=flags,
         )
+        return True
 
     @staticmethod
     def _plist_path() -> str:

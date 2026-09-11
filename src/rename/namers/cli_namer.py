@@ -18,6 +18,7 @@ import subprocess
 import tempfile
 
 from .. import util
+from ..windows_batch import UnsafeBatchArgument, batch_command
 from .base import INSTRUCTION, Namer, build_excerpt
 
 _TIMEOUT = 90  # codex with reasoning can take a while; keep generous
@@ -60,18 +61,31 @@ def _run(
     *,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
+    input_text: str | None = None,
 ):
     merged = os.environ.copy()
     if env:
         merged.update(env)
+    resolved = shutil.which(argv[0]) or argv[0]
+    command = [resolved, *argv[1:]]
+    if os.name == "nt" and resolved.lower().endswith((".cmd", ".bat")):
+        # CreateProcess cannot launch batch files directly. Conversation text is
+        # supplied on stdin, never interpolated into this cmd.exe command line.
+        comspec = os.environ.get("COMSPEC", "cmd.exe")
+        try:
+            command = batch_command(comspec, command[0], *command[1:])
+        except UnsafeBatchArgument as exc:
+            util.log(f"{argv[0]} namer call cannot launch safely: {exc}", level="debug")
+            return None
     try:
         return subprocess.run(
-            argv,
+            command,
             capture_output=True,
             text=True,
             timeout=_TIMEOUT,
             env=merged,
             cwd=cwd,
+            input=input_text,
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         util.log(f"{argv[0]} namer call failed: {exc}", level="debug")
@@ -85,11 +99,17 @@ def _run_ephemeral(
     *,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
+    input_text: str | None = None,
 ):
     """Run with persistence-killing flags; retry without them on older CLIs."""
-    proc = _run(required + list(optional) + trailing, env=env, cwd=cwd)
+    proc = _run(
+        required + list(optional) + trailing,
+        env=env,
+        cwd=cwd,
+        input_text=input_text,
+    )
     if proc is not None and proc.returncode != 0 and _unknown_flag(proc.stderr):
-        proc = _run(required + trailing, env=env, cwd=cwd)
+        proc = _run(required + trailing, env=env, cwd=cwd, input_text=input_text)
     return proc
 
 
@@ -117,9 +137,10 @@ class CliNamer(Namer):
         proc = _run_ephemeral(
             argv,
             _CLAUDE_EPHEMERAL_FLAGS,
-            ["-p", prompt],
+            ["-p"],
             env=env,
             cwd=_scratch_cwd(),
+            input_text=prompt,
         )
         if proc is None:
             return None
@@ -144,11 +165,17 @@ class CliNamer(Namer):
             model = self.options.get("model", _CODEX_DEFAULT_MODEL)
             if model:
                 argv += ["-m", str(model)]
+            env = None
+            home = self.options.get("home")
+            if isinstance(home, str) and home.strip():
+                env = {"CODEX_HOME": home.strip()}
             proc = _run_ephemeral(
                 argv,
                 _CODEX_EPHEMERAL_FLAGS,
-                ["--output-last-message", out_path, prompt],
+                ["--output-last-message", out_path, "-"],
+                env=env,
                 cwd=_scratch_cwd(),
+                input_text=prompt,
             )
             if proc is None:
                 return None

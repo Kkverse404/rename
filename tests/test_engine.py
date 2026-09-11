@@ -1,10 +1,13 @@
 import time
 
 from rename.adapters.base import Adapter
-from rename.config import Config
+from rename.config import Config, StructuredNamingConfig
 from rename.engine import Engine
 from rename.models import Message, Session
 from rename.namers.base import Namer
+from rename.namers.structured_codex import NamingDecision
+from rename.session_naming import SessionNamingWorkflow
+from rename.session_registry import SessionRegistry
 from rename.state import StateStore
 
 
@@ -165,10 +168,40 @@ def test_renames_again_after_new_content(tmp_path):
 
 def test_dry_run_writes_nothing(tmp_path):
     adapter = FakeAdapter([_idle_session()], TRANSCRIPT)
-    eng = _engine(tmp_path, adapter, FakeNamer(), dry_run=True)
+    namer = FakeNamer()
+    calls = {"n": 0}
+    original = namer.generate
+
+    def counted(*args, **kwargs):
+        calls["n"] += 1
+        return original(*args, **kwargs)
+
+    namer.generate = counted
+    eng = _engine(tmp_path, adapter, namer, dry_run=True)
     renamed, _ = eng.tick()
     assert renamed == 0
     assert adapter.writes == []
+    assert calls["n"] == 0
+
+
+def test_plan_never_calls_legacy_namer(tmp_path):
+    adapter = FakeAdapter([_idle_session()], TRANSCRIPT)
+    namer = FakeNamer()
+    calls = {"n": 0}
+    original = namer.generate
+
+    def counted(*args, **kwargs):
+        calls["n"] += 1
+        return original(*args, **kwargs)
+
+    namer.generate = counted
+    engine = _engine(tmp_path, adapter, namer)
+
+    plans, _alive, _healthy = engine.plan()
+
+    assert plans[0][1].action == "rename"
+    assert plans[0][1].new_title is None
+    assert calls["n"] == 0
 
 
 def test_discover_failure_preserves_state(tmp_path):
@@ -322,3 +355,201 @@ def test_baseline_does_not_block_new_activity(tmp_path):
     renamed, _ = eng.tick()
     assert renamed == 1
     assert adapter.writes == [("s1", "Billing export")]
+
+
+class StructuredClassifier:
+    def __init__(self):
+        self.calls = 0
+
+    def classify(self, messages, *, cwd, modules):
+        self.calls += 1
+        return NamingDecision(
+            ready=True,
+            module="repo",
+            summary="实现稳定会话命名",
+            reason_code="explicit_goal",
+            evidence_message_ids=["user-1"],
+            confidence=0.95,
+        )
+
+
+class StructuredWriter:
+    def __init__(self, title="Old"):
+        self.title = title
+        self.writes = []
+
+    def read_title(self, thread_id):
+        return self.title
+
+    def set_title(
+        self,
+        thread_id,
+        title,
+        *,
+        expected_title,
+        expected_updated_at=None,
+        expected_status=None,
+    ):
+        assert self.title == expected_title
+        self.writes.append((thread_id, title))
+        self.title = title
+
+
+class CodexFakeAdapter(FakeAdapter):
+    name = "codex"
+    label = "Codex"
+
+
+def _structured_engine(tmp_path, *, mode="apply", dry_run=False):
+    now = time.time()
+    session = Session(
+        "codex",
+        "thread-1",
+        "Old",
+        last_active=now - 60,
+        cwd=r"C:\work\repo",
+        meta={"created_at_ms": int((now - 120) * 1000), "updated_at": now - 60},
+    )
+    adapter = CodexFakeAdapter(
+        [session], {session.id: [Message("user", "实现稳定会话命名")]}
+    )
+    config = Config(
+        idle_seconds=300,
+        max_age_days=30,
+        min_user_messages=1,
+        dry_run=dry_run,
+        structured_naming=StructuredNamingConfig(
+            mode=mode, modules=("repo",), idle_seconds=30
+        ),
+    )
+    state = StateStore(tmp_path / "state.json")
+    state.set_baseline(0.0)
+    registry = SessionRegistry(tmp_path / "registry.sqlite3")
+    classifier = StructuredClassifier()
+    writer = StructuredWriter()
+    workflow = SessionNamingWorkflow(
+        config.structured_naming,
+        registry,
+        classifier,
+        writer,
+        dry_run=dry_run,
+    )
+    engine = Engine(
+        config,
+        [adapter],
+        FakeNamer("Legacy must not run"),
+        state,
+        session_naming=workflow,
+    )
+    return engine, session, registry, classifier, writer
+
+
+def test_engine_routes_codex_apply_through_structured_workflow(tmp_path):
+    engine, session, registry, classifier, writer = _structured_engine(tmp_path)
+
+    renamed, total = engine.tick()
+
+    record = registry.get("codex", session.id)
+    assert (renamed, total) == (1, 1)
+    assert writer.writes == [(session.id, "#1-repo 实现稳定会话命名")]
+    assert classifier.calls == 1
+    assert record is not None and record.status == "finalized"
+
+
+def test_engine_quiet_apply_emits_no_success_log(tmp_path, capsys):
+    engine, _session, _registry, _classifier, _writer = _structured_engine(tmp_path)
+
+    assert engine.tick(quiet=True) == (1, 1)
+
+    assert capsys.readouterr().out == ""
+
+
+def test_engine_structured_preview_plan_and_tick_are_pure(tmp_path):
+    engine, _session, registry, classifier, writer = _structured_engine(
+        tmp_path, mode="preview"
+    )
+
+    plans, _alive, _healthy = engine.plan()
+    renamed, total = engine.tick()
+
+    assert plans[0][1].naming_status == "unregistered"
+    assert (renamed, total) == (0, 0)
+    assert not registry.path.exists()
+    assert not engine.state.path.exists()
+    assert classifier.calls == 0
+    assert writer.writes == []
+
+
+def test_engine_dry_run_structured_apply_is_pure(tmp_path):
+    engine, _session, registry, classifier, writer = _structured_engine(
+        tmp_path, dry_run=True
+    )
+
+    renamed, total = engine.tick()
+
+    assert (renamed, total) == (0, 0)
+    assert not registry.path.exists()
+    assert classifier.calls == 0
+    assert writer.writes == []
+
+
+def test_structured_record_stays_protected_when_mode_is_off(tmp_path):
+    engine, session, registry, classifier, writer = _structured_engine(tmp_path)
+    engine.tick()
+    session.title = writer.title
+    engine.cfg.structured_naming.mode = "off"
+    engine.session_naming = SessionNamingWorkflow(
+        engine.cfg.structured_naming, registry, classifier, writer
+    )
+
+    renamed, total = engine.tick()
+
+    assert (renamed, total) == (0, 0)
+    assert len(writer.writes) == 1
+    assert registry.get("codex", session.id).status == "finalized"
+
+
+def test_session_filter_does_not_prune_unselected_legacy_state(tmp_path):
+    now = time.time()
+    sessions = [
+        Session("fake", "s1", "One", last_active=now - 600),
+        Session("fake", "s2", "Two", last_active=now - 601),
+    ]
+    transcripts = {
+        "s1": [Message("user", "first")],
+        "s2": [Message("user", "second")],
+    }
+    adapter = FakeAdapter(sessions, transcripts)
+    engine = _engine(tmp_path, adapter, FakeNamer("Named"))
+    engine.state.update("fake", "s1", title="One")
+    engine.state.update("fake", "s2", title="Two")
+
+    engine.tick(session_filter={"s1"})
+
+    assert engine.state.get("fake", "s2") == {"title": "Two"}
+
+
+def test_daemon_reloads_runtime_before_the_next_pass(monkeypatch):
+    passes = []
+
+    class Loop:
+        def __init__(self, dry_run):
+            self.cfg = Config(dry_run=dry_run, poll_seconds=1)
+            self.namer = FakeNamer("unused")
+            self.adapters = []
+
+        def tick(self):
+            passes.append(self.cfg.dry_run)
+            return 0, 0
+
+    first = Loop(False)
+    second = Loop(True)
+    monkeypatch.setattr("rename.engine.time.sleep", lambda _seconds: None)
+
+    Engine.run_forever(
+        first,
+        stop=lambda: len(passes) == 2,
+        reload=lambda: second,
+    )
+
+    assert passes == [False, True]

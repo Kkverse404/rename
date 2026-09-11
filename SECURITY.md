@@ -14,11 +14,17 @@ privacy are a first-class concern.
   key to paste. Those calls are ephemeral and must not create extra sessions in
   your Claude Code / Codex history. The `anthropic` / `openai` namers do the same
   via a key you set.
-- **Fully offline option.** Set `namer = "heuristic"` and nothing ever leaves
-  your machine.
-- **Conservative writes.** Reads use read-only SQLite connections; writes use a
-  busy timeout and a single atomic transaction; it only ever touches *idle*
-  sessions.
+- **Fully offline option.** Set `namer = "heuristic"` and keep
+  `structured_naming.mode = "off"` or `"preview"`; then no naming transcript
+  leaves your machine. Structured `apply` has its own configured Codex model
+  and is not made offline by the legacy `namer` setting.
+- **Conservative writes.** Session discovery uses read-only stores. Structured
+  Codex naming writes titles only through the app-server compare/write/read
+  protocol; it never falls back to updating the live Codex SQLite database.
+  Its permanent registry stages the intended title before native mutation, so
+  a restart can recover either half of the write.
+- **Read-only previews.** `list`, `status`, GUI refresh, `preview`, and dry-run
+  paths do not allocate structured IDs, call a model, or change titles.
 
 ## Reporting a vulnerability
 

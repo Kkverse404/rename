@@ -108,6 +108,10 @@ _STRINGS = {
     "reason_idle": {"en": "idle %s", "zh-Hans": "已空闲 %s"},
     # toasts
     "toast_renamed": {"en": "Renamed to: %s", "zh-Hans": "已改名为:%s"},
+    "toast_no_change": {
+        "en": "No title changed; the session may be pending or protected.",
+        "zh-Hans": "标题未变化；该会话可能仍在等待任务明确，或已受保护。",
+    },
     "toast_refreshed": {"en": "Sessions refreshed.", "zh-Hans": "会话已刷新。"},
     "toast_daemon_paused": {
         "en": "Background renaming paused.",
@@ -126,6 +130,29 @@ _STRINGS = {
         "zh-Hans": "命名后端(新标题怎么生成)",
     },
     "settings_section_tools": {"en": "Tools to manage", "zh-Hans": "管理哪些工具"},
+    "settings_section_structured": {
+        "en": "Structured Codex naming",
+        "zh-Hans": "Codex 结构化命名",
+    },
+    "settings_structured_mode": {"en": "Mode", "zh-Hans": "模式"},
+    "settings_structured_model": {
+        "en": "Classification model",
+        "zh-Hans": "分类模型",
+    },
+    "settings_structured_modules": {
+        "en": "Allowed modules",
+        "zh-Hans": "允许的模块",
+    },
+    "settings_structured_modules_hint": {
+        "en": "Comma-separated; empty uses the project folder",
+        "zh-Hans": "逗号分隔；留空时使用项目目录名",
+    },
+    "settings_structured_note": {
+        "en": "Preview never allocates IDs or calls a model. Apply affects only Codex; "
+        "saved changes take effect before the next background pass.",
+        "zh-Hans": "preview 不分配编号也不调用模型；apply 仅作用于 Codex。"
+        "保存后在下一轮后台扫描前生效。",
+    },
     "settings_idle_seconds": {
         "en": "Wait until session is idle (seconds)",
         "zh-Hans": "会话空闲多久才动(秒)",
@@ -154,6 +181,7 @@ _STRINGS = {
     "settings_claude_model": {"en": "Claude model", "zh-Hans": "Claude 模型"},
     "settings_codex_model": {"en": "Codex model", "zh-Hans": "Codex 模型"},
     "settings_save": {"en": "Save", "zh-Hans": "保存"},
+    "settings_cancel": {"en": "Cancel", "zh-Hans": "取消"},
     "settings_revert": {"en": "Revert", "zh-Hans": "撤销改动"},
     "settings_saved": {
         "en": "Saved. The daemon picks up the new values on its next pass.",
@@ -162,6 +190,10 @@ _STRINGS = {
     # daemon status pill
     "daemon_running": {"en": "Daemon running", "zh-Hans": "后台运行中"},
     "daemon_stopped": {"en": "Daemon stopped", "zh-Hans": "后台已停止"},
+    "daemon_managed_external": {
+        "en": "This daemon was started outside the tray app; stop it with rename uninstall.",
+        "zh-Hans": "此后台服务并非由托盘启动；请用 rename uninstall 停止。",
+    },
 }
 
 

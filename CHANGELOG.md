@@ -5,6 +5,27 @@ All notable changes to this project are documented here. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in Codex structured naming with machine-wide monotonic display IDs,
+  validated `#ID-module summary` titles, permanent human-edit protection,
+  explicit reopen/rollback commands, and a recovery-safe registry.
+- Config and Windows GUI controls for `off`, `preview`, and `apply` modes.
+
+### Changed
+
+- Codex title writes now use the app-server compare/write/read protocol. Codex
+  SQLite access is read-only and honors an optional configured `CODEX_HOME`.
+  Discovery distinguishes the explicit writable `name` from generated
+  `title`/`preview` fallback text.
+- `rename list`, GUI refresh, and all dry-run paths no longer call naming
+  models or allocate structured IDs.
+- Windows `.cmd`/`.bat` CLI launchers are invoked through `cmd.exe`, with
+  conversation text isolated on stdin and command tokens safely quoted.
+- Daemons now hold a single-instance lock and reload configuration before each
+  subsequent pass. Windows GUI actions report protected/no-change sessions
+  without claiming a rename occurred.
+
 ## [1.0.1] - 2026-08-19
 
 ### Fixed

@@ -60,6 +60,15 @@ def state_path() -> Path:
     return state_dir() / "state.json"
 
 
+def registry_path() -> Path:
+    """Permanent structured-session registry; unlike state.json, never pruned."""
+    return state_dir() / "session_registry.sqlite3"
+
+
+def daemon_lock_path() -> Path:
+    return state_dir() / "daemon.lock"
+
+
 def log_path() -> Path:
     return state_dir() / "rename.log"
 

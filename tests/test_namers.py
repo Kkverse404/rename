@@ -1,3 +1,5 @@
+import pytest
+
 import rename.namers.cli_namer as cli_namer
 from rename.config import Config
 from rename.namers import ApiNamer, get_namer
@@ -6,6 +8,12 @@ from rename.namers import ApiNamer, get_namer
 def _which(*available):
     avail = set(available)
     return lambda name: f"/usr/bin/{name}" if name in avail else None
+
+
+@pytest.fixture(autouse=True)
+def _stable_cli_paths(monkeypatch):
+    """Do not let a developer machine's .cmd shims change argv assertions."""
+    monkeypatch.setattr(cli_namer.shutil, "which", lambda name: name)
 
 
 def test_auto_prefers_claude(monkeypatch):
@@ -59,6 +67,7 @@ def test_claude_uses_fast_model_and_clean_output(monkeypatch):
     assert "--bare" in seen["argv"]
     assert seen["env"]["CLAUDE_CODE_SKIP_PROMPT_HISTORY"] == "1"
     assert seen["cwd"] and seen["cwd"].endswith("namer-scratch")
+    assert seen["argv"][-1] == "-p"
 
 
 def test_claude_retries_without_ephemeral_flags_on_unknown_option(monkeypatch):
@@ -149,6 +158,26 @@ def test_codex_respects_model_override(monkeypatch):
     assert title == "Custom model title"
     assert "custom-codex" in seen["argv"]
     assert "gpt-5.3-codex-spark" not in seen["argv"]
+
+
+def test_codex_namer_passes_configured_home_via_environment(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        seen["env"] = kw["env"]
+        out_path = argv[argv.index("--output-last-message") + 1]
+        with open(out_path, "w", encoding="utf-8") as fh:
+            fh.write("Configured home\n")
+        return _Proc()
+
+    monkeypatch.setattr(cli_namer.subprocess, "run", fake_run)
+    home = r"D:\中文 CodexHome"
+    title = cli_namer.CliNamer("codex", {"home": home}).generate(_MSGS)
+
+    assert title == "Configured home"
+    assert seen["env"]["CODEX_HOME"] == home
+    assert home not in " ".join(seen["argv"])
 
 
 def test_codex_failure_returns_none(monkeypatch):

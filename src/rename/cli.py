@@ -9,9 +9,13 @@ import sys
 
 from . import __version__, service, util
 from . import config as config_mod
-from .adapters import all_adapters, get_adapters
+from .adapters import CodexAdapter, all_adapters, get_adapters
+from .daemon_lock import DaemonAlreadyRunningError, DaemonLock
 from .engine import Engine
 from .namers import NAMER_NAMES, get_namer
+from .namers.structured_codex import classifier_from_config
+from .session_naming import SessionNamingWorkflow
+from .session_registry import RegistryError, SessionRecord, SessionRegistry
 from .state import StateStore
 
 
@@ -64,6 +68,7 @@ def _apply_overrides(cfg: config_mod.Config, args) -> config_mod.Config:
         cfg.dry_run = True
     if getattr(args, "all", False) and getattr(args, "once", False):
         cfg.idle_seconds = 0  # include sessions of any age / idleness
+        cfg.structured_naming.idle_seconds = 0
         cfg.max_age_days = 36500
     return cfg
 
@@ -72,15 +77,34 @@ def _build(cfg: config_mod.Config):
     adapters = get_adapters(cfg)
     namer = get_namer(cfg)
     state = StateStore()
-    return adapters, namer, state, Engine(cfg, adapters, namer, state)
+    registry = SessionRegistry(util.registry_path())
+    codex = next((a for a in adapters if isinstance(a, CodexAdapter)), None)
+    writer = codex.writer if codex is not None else CodexAdapter(
+        codex_home=cfg.codex_home
+    ).writer
+    classifier = classifier_from_config(
+        cfg.structured_naming,
+        codex_home=cfg.codex_home,
+    )
+    workflow = SessionNamingWorkflow(
+        cfg.structured_naming,
+        registry,
+        classifier,
+        writer,
+        dry_run=cfg.dry_run,
+    )
+    return adapters, namer, state, Engine(
+        cfg, adapters, namer, state, session_naming=workflow
+    )
 
 
 # --------------------------------------------------------------------------- #
 # commands
 # --------------------------------------------------------------------------- #
 def cmd_run(args) -> int:
-    config_mod.ensure_default()
     cfg = _apply_overrides(config_mod.load(), args)
+    if not cfg.dry_run:
+        config_mod.ensure_default()
     util.set_verbose(args.verbose)
     if getattr(args, "limit", None) is not None:
         cfg.batch_size = args.limit  # also caps the daemon's per-pass work
@@ -91,6 +115,7 @@ def cmd_run(args) -> int:
         # substance gates so they always go through (the engine still skips
         # "already current" titles, which is what we want).
         cfg.idle_seconds = 0
+        cfg.structured_naming.idle_seconds = 0
         cfg.min_user_messages = 0
         cfg.max_age_days = 36500
     adapters, namer, state, engine = _build(cfg)
@@ -105,7 +130,13 @@ def cmd_run(args) -> int:
             if (all_ or session_filter or include_historical)
             else getattr(args, "limit", None)
         )
-        if (all_ or include_historical) and namer.name != "heuristic" and not cfg.dry_run:
+        if cfg.structured_naming.applies and not cfg.dry_run:
+            util.log(
+                "structured Codex naming is enabled — eligible threads may receive "
+                f"permanent IDs and use model '{cfg.structured_naming.model}'",
+                level="warn",
+            )
+        elif (all_ or include_historical) and namer.name != "heuristic" and not cfg.dry_run:
             scope = "ALL historical sessions" if include_historical else "ALL eligible sessions"
             util.log(
                 f"renaming {scope} via '{namer.name}' — this can take "
@@ -113,16 +144,36 @@ def cmd_run(args) -> int:
                 "or --namer heuristic for instant offline titles.",
                 level="warn",
             )
+        json_output = bool(getattr(args, "json", False))
         renamed, total = engine.tick(
             limit=limit,
-            progress=True,
+            progress=not json_output,
+            quiet=json_output,
             session_filter=session_filter,
             include_historical=include_historical,
         )
-        util.log(f"done — renamed {renamed} of {total} candidate(s)")
+        if json_output:
+            print(
+                json.dumps(
+                    {"renamed": renamed, "candidates": total, "changed": renamed > 0},
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            util.log(f"done — renamed {renamed} of {total} candidate(s)")
         return 0
+    def reload_engine() -> Engine:
+        refreshed = _apply_overrides(config_mod.load(), args)
+        if getattr(args, "limit", None) is not None:
+            refreshed.batch_size = args.limit
+        return _build(refreshed)[3]
+
     try:
-        engine.run_forever()
+        with DaemonLock(util.daemon_lock_path()):
+            engine.run_forever(reload=reload_engine)
+    except DaemonAlreadyRunningError:
+        util.log("rename daemon is already running; exiting", level="warn")
+        return 0
     except KeyboardInterrupt:
         util.log("stopped")
     return 0
@@ -149,6 +200,8 @@ def cmd_list(args) -> int:
                 "reason": p.reason,
                 "idle_seconds": round(p.session.idle_seconds(now)),
                 "cwd": p.session.cwd,
+                "display_id": p.display_id,
+                "naming_status": p.naming_status,
             }
             for _a, p in plans
         ]
@@ -170,7 +223,11 @@ def cmd_list(args) -> int:
             cur = trunc(s.title or "—", 36)
             if plan.action == "rename":
                 would_rename += 1
-                right = green("→ " + (plan.new_title or ""))
+                right = (
+                    green("→ " + plan.new_title)
+                    if plan.new_title
+                    else dim("· " + plan.reason)
+                )
             elif plan.reason.startswith("active"):
                 right = dim("· active")
             else:
@@ -213,6 +270,13 @@ def cmd_status(args) -> int:
             pass
     resolved = get_namer(cfg).name
     enabled = set(cfg.tools)
+    registry = SessionRegistry(util.registry_path())
+    try:
+        registry_counts = dict(registry.counts())
+        registry_error = None
+    except RegistryError as exc:
+        registry_counts = None
+        registry_error = str(exc)
 
     if getattr(args, "json", False):
         out = {
@@ -231,6 +295,18 @@ def cmd_status(args) -> int:
             "min_user_messages": cfg.min_user_messages,
             "batch_size": cfg.batch_size,
             "dry_run": cfg.dry_run,
+            "structured_naming": {
+                "mode": cfg.structured_naming.mode,
+                "effective_read_only": (
+                    cfg.dry_run or cfg.structured_naming.mode != "apply"
+                ),
+                "model": cfg.structured_naming.model,
+                "idle_seconds": cfg.structured_naming.idle_seconds,
+                "modules": list(cfg.structured_naming.modules),
+                "registry_path": str(registry.path),
+                "registry_counts": registry_counts,
+                "registry_error": registry_error,
+            },
             "daemon": {"status_line": service.status_line()},
             "tools": [
                 {
@@ -239,7 +315,7 @@ def cmd_status(args) -> int:
                     "available": adapter.available(),
                     "enabled": adapter.name in enabled,
                 }
-                for adapter in all_adapters()
+                for adapter in all_adapters(cfg)
             ],
         }
         print(json.dumps(out, ensure_ascii=False, indent=2))
@@ -250,6 +326,16 @@ def cmd_status(args) -> int:
     print(f"  config : {cp}{cp_note}")
     print(f"  state  : {sp}  ({tracked} tracked)")
     print(f"  log    : {util.log_path()}")
+    structured = cfg.structured_naming
+    effective = "read-only" if cfg.dry_run or structured.mode != "apply" else "write-enabled"
+    print(
+        f"  naming : structured={structured.mode} ({effective})  "
+        f"registry={registry.path}"
+    )
+    if registry_counts is not None:
+        print(f"           registered={registry_counts['total']}  states={registry_counts}")
+    elif registry_error:
+        print(f"           registry error: {registry_error}")
     namer_str = cfg.namer if resolved == cfg.namer else f"{cfg.namer} → {resolved}"
     print(
         f"  config : idle={util.fmt_dur(cfg.idle_seconds)}  "
@@ -258,10 +344,188 @@ def cmd_status(args) -> int:
     print(f"  {service.status_line()}")
 
     print(bold("  tools:"))
-    for adapter in all_adapters():
+    for adapter in all_adapters(cfg):
         avail = green("found") if adapter.available() else dim("not found")
         suffix = "" if adapter.name in enabled else dim("  [disabled in config]")
         print(f"    {adapter.label:<13} {avail}{suffix}")
+    return 0
+
+
+def _find_registry_record(
+    registry: SessionRegistry, identifier: str
+) -> SessionRecord | None:
+    value = identifier.removeprefix("#")
+    records = registry.list_records(tool="codex")
+    if value.isdigit():
+        display_id = int(value)
+        return next((record for record in records if record.display_id == display_id), None)
+    return next(
+        (record for record in records if record.native_session_id == identifier),
+        None,
+    )
+
+
+def cmd_naming_status(args) -> int:
+    registry = SessionRegistry(util.registry_path())
+    try:
+        records = registry.list_records(tool="codex")
+        counts = dict(registry.counts(tool="codex"))
+    except RegistryError as exc:
+        util.log(f"structured registry unavailable: {exc}", level="error")
+        return 1
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {
+                    "registry_path": str(registry.path),
+                    "counts": counts,
+                    "sessions": [
+                        {
+                            "display_id": record.display_id,
+                            "native_session_id": record.native_session_id,
+                            "status": record.status,
+                            "original_title": record.original_title,
+                            "desired_title": record.desired_title,
+                            "observed_title": record.observed_title,
+                            "updated_at": record.updated_at,
+                        }
+                        for record in records
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    print(bold("structured naming registry"))
+    print(f"  path   : {registry.path}")
+    print(f"  counts : {counts}")
+    for record in records:
+        title = record.desired_title or record.observed_title or "—"
+        print(
+            f"  #{record.display_id:<5} {record.status:<15} "
+            f"{trunc(title, 58)}  {record.native_session_id}"
+        )
+    return 0
+
+
+def cmd_naming_reopen(args) -> int:
+    cfg = config_mod.load()
+    registry = SessionRegistry(util.registry_path())
+    try:
+        record = _find_registry_record(registry, args.session)
+        if record is None:
+            util.log(f"no registered Codex session matches {args.session!r}", level="error")
+            return 1
+        read_only = cfg.dry_run or getattr(args, "dry_run", False)
+        reopened = (
+            record
+            if read_only
+            else registry.reopen(record.tool, record.native_session_id)
+        )
+    except RegistryError as exc:
+        util.log(f"could not reopen structured session: {exc}", level="error")
+        return 1
+    payload = {
+        "display_id": reopened.display_id,
+        "native_session_id": reopened.native_session_id,
+        "status": reopened.status,
+        "dry_run": read_only,
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        verb = "would reopen" if read_only else "reopened"
+        print(
+            f"{verb} #{reopened.display_id} ({reopened.native_session_id}); "
+            "its display ID is unchanged"
+        )
+    return 0
+
+
+def cmd_naming_rollback(args) -> int:
+    cfg = config_mod.load()
+    registry = SessionRegistry(util.registry_path())
+    try:
+        record = _find_registry_record(registry, args.session)
+    except RegistryError as exc:
+        util.log(f"structured registry unavailable: {exc}", level="error")
+        return 1
+    if record is None:
+        util.log(f"no registered Codex session matches {args.session!r}", level="error")
+        return 1
+    if record.status != "finalized":
+        util.log(
+            f"session #{record.display_id} is {record.status}, not finalized",
+            level="error",
+        )
+        return 1
+    if record.original_title is None:
+        util.log(
+            f"session #{record.display_id} had no restorable original title",
+            level="error",
+        )
+        return 1
+    read_only = cfg.dry_run or getattr(args, "dry_run", False)
+    if read_only:
+        payload = {
+            "display_id": record.display_id,
+            "native_session_id": record.native_session_id,
+            "status": record.status,
+            "would_restore_title": record.original_title,
+            "dry_run": True,
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"would roll back #{record.display_id} to {record.original_title!r}; "
+                "dry-run made no changes"
+            )
+        return 0
+
+    codex = CodexAdapter(codex_home=cfg.codex_home)
+    if not codex.available():
+        util.log("Codex session store was not found", level="error")
+        return 1
+    try:
+        session = next(
+            item for item in codex.discover(0.0) if item.id == record.native_session_id
+        )
+    except StopIteration:
+        util.log("the registered Codex session is not currently discoverable", level="error")
+        return 1
+    if session.native_title != record.desired_title:
+        util.log(
+            "rollback stopped because the native title was changed externally",
+            level="error",
+        )
+        return 1
+    try:
+        registry.stage_rollback(record.tool, record.native_session_id)
+        codex.writer.set_title(
+            session.id,
+            record.original_title,
+            expected_title=record.desired_title,
+            expected_updated_at=session.meta.get("updated_at"),
+            expected_status=session.meta.get("status"),
+        )
+        rolled_back = registry.rolled_back(
+            record.tool, record.native_session_id, observed=record.original_title
+        )
+    except Exception as exc:
+        util.log(f"rollback failed safely: {exc}", level="error")
+        return 1
+    payload = {
+        "display_id": rolled_back.display_id,
+        "native_session_id": rolled_back.native_session_id,
+        "status": rolled_back.status,
+        "restored_title": record.original_title,
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"rolled back #{rolled_back.display_id} to {record.original_title!r}")
     return 0
 
 
@@ -499,6 +763,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--interval", type=int, metavar="SEC", help="seconds between passes")
     pr.add_argument("--limit", type=int, metavar="N", help="max sessions to rename per pass")
     pr.add_argument("--dry-run", action="store_true", help="log changes without writing")
+    pr.add_argument("--json", action="store_true", help="output the pass result as JSON")
     pr.add_argument(
         "--all", action="store_true", help="with --once: rename ALL eligible sessions now"
     )
@@ -514,6 +779,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(po)
     po.add_argument("--limit", type=int, metavar="N", help="max sessions to rename")
     po.add_argument("--dry-run", action="store_true", help="log changes without writing")
+    po.add_argument("--json", action="store_true", help="output the pass result as JSON")
     po.add_argument(
         "--all",
         action="store_true",
@@ -578,6 +844,22 @@ def build_parser() -> argparse.ArgumentParser:
     ps = sub.add_parser("status", help="show config, detected tools and daemon status")
     ps.add_argument("--json", action="store_true", help="output JSON instead of text")
     ps.set_defaults(func=cmd_status)
+
+    pn = sub.add_parser("naming", help="inspect or operate structured Codex names")
+    pn_sub = pn.add_subparsers(dest="naming_cmd", required=True)
+    pns = pn_sub.add_parser("status", help="show the permanent naming registry")
+    pns.add_argument("--json", action="store_true", help="output JSON instead of text")
+    pns.set_defaults(func=cmd_naming_status)
+    pnr = pn_sub.add_parser("reopen", help="allow a protected session to classify again")
+    pnr.add_argument("session", help="native session id or #display-id")
+    pnr.add_argument("--json", action="store_true", help="output JSON instead of text")
+    pnr.add_argument("--dry-run", action="store_true", help="show the action without writing")
+    pnr.set_defaults(func=cmd_naming_reopen)
+    pnb = pn_sub.add_parser("rollback", help="restore the title captured before naming")
+    pnb.add_argument("session", help="native session id or #display-id")
+    pnb.add_argument("--json", action="store_true", help="output JSON instead of text")
+    pnb.add_argument("--dry-run", action="store_true", help="show the action without writing")
+    pnb.set_defaults(func=cmd_naming_rollback)
 
     pc = sub.add_parser("config", help="create/show the config file")
     pc.add_argument("--path", action="store_true", help="print the config path only")

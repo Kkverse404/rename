@@ -1,33 +1,44 @@
-"""Codex adapter.
-
-Titles live in ``~/.codex/state_<N>.sqlite`` (table ``threads``, column
-``title``, keyed by thread ``id``). The full transcript is the rollout JSONL at
-``threads.rollout_path``. Renaming is a single ``UPDATE threads SET title=?``;
-the Codex Desktop app reads this column for its thread list.
-"""
+"""Codex discovery/transcript adapter with app-server title writes."""
 
 from __future__ import annotations
 
 import json
+import os
 import re
-import sqlite3
 from pathlib import Path
+from typing import Callable
 
 from ..models import Message, Session
-from ._sqlite import connect_read, connect_write
+from ._sqlite import connect_read
 from .base import Adapter
+from .codex_writer import CodexWriter
 
 _VER_RE = re.compile(r"state_(\d+)\.sqlite$")
-_FULL_COLS = "id,title,rollout_path,updated_at_ms,cwd,archived,first_user_message"
-_MIN_COLS = "id,title,rollout_path,updated_at_ms"
+_DISCOVERY_COLS = (
+    "id",
+    "title",
+    "name",
+    "preview",
+    "rollout_path",
+    "updated_at_ms",
+    "created_at_ms",
+    "cwd",
+    "archived",
+    "first_user_message",
+)
 
 
-def _codex_root() -> Path:
+def _codex_root(explicit: str | os.PathLike[str] | None = None) -> Path:
+    if explicit is not None:
+        return Path(explicit).expanduser()
+    configured = os.environ.get("CODEX_HOME")
+    if configured:
+        return Path(configured).expanduser()
     return Path.home() / ".codex"
 
 
-def _find_state_db() -> Path | None:
-    root = _codex_root()
+def _find_state_db(root: Path | None = None) -> Path | None:
+    root = root or _codex_root()
     if not root.is_dir():
         return None
     candidates = sorted(
@@ -58,28 +69,44 @@ class CodexAdapter(Adapter):
     name = "codex"
     label = "Codex"
 
+    def __init__(
+        self,
+        codex_home: str | os.PathLike[str] | None = None,
+        writer: CodexWriter | None = None,
+        writer_factory: Callable[..., CodexWriter] = CodexWriter,
+    ) -> None:
+        self.codex_home = _codex_root(codex_home)
+        self._writer = (
+            writer if writer is not None else writer_factory(codex_home=self.codex_home)
+        )
+
     def available(self) -> bool:
-        return _find_state_db() is not None
+        return _find_state_db(self.codex_home) is not None
+
+    @property
+    def writer(self) -> CodexWriter:
+        """Native writer shared with the structured workflow."""
+        return self._writer
 
     def discover(self, since: float) -> list[Session]:
-        db = _find_state_db()
+        db = _find_state_db(self.codex_home)
         if not db:
             return []
         since_ms = int(since * 1000)
         con = connect_read(db)
         try:
-            try:
-                cur = con.execute(
-                    f"SELECT {_FULL_COLS} FROM threads "
-                    "WHERE updated_at_ms >= ? ORDER BY updated_at_ms DESC",
-                    (since_ms,),
-                )
-            except sqlite3.OperationalError:
-                cur = con.execute(
-                    f"SELECT {_MIN_COLS} FROM threads "
-                    "WHERE updated_at_ms >= ? ORDER BY updated_at_ms DESC",
-                    (since_ms,),
-                )
+            available_cols = {
+                row[1] for row in con.execute("PRAGMA table_info(threads)").fetchall()
+            }
+            required = {"id", "title", "rollout_path", "updated_at_ms"}
+            if not required.issubset(available_cols):
+                return []
+            selected_cols = [col for col in _DISCOVERY_COLS if col in available_cols]
+            cur = con.execute(
+                f"SELECT {','.join(selected_cols)} FROM threads "
+                "WHERE updated_at_ms >= ? ORDER BY updated_at_ms DESC",
+                (since_ms,),
+            )
             cols = [d[0] for d in cur.description]
             out: list[Session] = []
             for row in cur.fetchall():
@@ -89,18 +116,30 @@ class CodexAdapter(Adapter):
                 updated = r.get("updated_at_ms")
                 if not updated:
                     continue
+                native_name = r.get("name")
+                fallback_title = r.get("title") or r.get("preview")
+                effective_title = (
+                    native_name
+                    if isinstance(native_name, str) and native_name
+                    else fallback_title
+                )
+                meta = {
+                    "db": str(db),
+                    "rollout_path": r.get("rollout_path"),
+                    "first_user_message": r.get("first_user_message"),
+                    "created_at_ms": r.get("created_at_ms"),
+                    "updated_at": updated / 1000.0,
+                }
+                if "name" in available_cols:
+                    meta["native_name"] = native_name
                 out.append(
                     Session(
                         tool=self.name,
                         id=r["id"],
-                        title=r.get("title"),
+                        title=effective_title,
                         last_active=updated / 1000.0,
                         cwd=r.get("cwd"),
-                        meta={
-                            "db": str(db),
-                            "rollout_path": r.get("rollout_path"),
-                            "first_user_message": r.get("first_user_message"),
-                        },
+                        meta=meta,
                     )
                 )
             return out
@@ -140,12 +179,10 @@ class CodexAdapter(Adapter):
         return msgs
 
     def set_title(self, session: Session, title: str) -> None:
-        db = session.meta["db"]
-        con = connect_write(db)
-        try:
-            con.execute(
-                "UPDATE threads SET title = ? WHERE id = ?", (title, session.id)
-            )
-            con.commit()
-        finally:
-            con.close()
+        self._writer.set_title(
+            session.id,
+            title,
+            expected_title=session.native_title,
+            expected_updated_at=session.meta.get("updated_at"),
+            expected_status=session.meta.get("status"),
+        )

@@ -1,6 +1,7 @@
 # Rename GUI (Windows / cross-platform)
 
 A Qt-based tray + dashboard GUI for rename, built with **PySide6**.
+Python 3.11 or newer is required, matching the CLI package.
 
 Designed primarily for Windows (since the [Swift app](../macos-app/) is
 macOS-only), but the same code runs on macOS and Linux too — useful if you
@@ -56,7 +57,7 @@ rename-gui
 ## Daemon mode on Windows
 
 There are two ways to keep the renamer running on Windows — pick whichever you
-prefer (running both just gives you two idle-safe daemons, harmless but wasteful):
+prefer. A machine-local lock prevents a second daemon from entering the loop.
 
 1. **`rename install`** (recommended, set-and-forget) — registers a login
    **Startup** shortcut that launches `pythonw -m rename run` with no console
@@ -66,7 +67,12 @@ prefer (running both just gives you two idle-safe daemons, harmless but wasteful
 2. **The tray app** (interactive control) — hit **Resume** and it spawns
    `rename run` as a child process with no console window and keeps it alive;
    **Pause** kills the child; closing the tray app stops it. Good when you want
-   to start/stop by hand without a permanent install.
+   to start/stop by hand without a permanent install. A daemon started by
+   `rename install` is shown as externally managed and must be stopped with
+   `rename uninstall`; the tray does not kill an unrelated Python process.
+
+Saved settings are reloaded before the daemon's next pass, including
+structured mode and dry-run changes.
 
 To also auto-launch the **GUI** itself at login, drop a shortcut to `rename-gui`
 (or `pythonw -m rename_gui`) into:
@@ -90,11 +96,6 @@ windows-app/
 
 ## Status
 
-**⚠ This GUI is shipped untested on Windows from the developer's end.** Code
-was written and reviewed on macOS, but I do not have a Windows machine to
-verify it runs. If you try it on Windows and hit anything broken, please
-open an issue with the traceback — fixes will be fast.
-
-PySide6 (Qt6) is fully cross-platform; the Windows-specific code paths
-(`subprocess` with `CREATE_NO_WINDOW`, plist/systemd guards) all degrade
-cleanly on other OSes.
+Windows CLI bridging, config round-trips, `.cmd` launching, and daemon locking
+have automated coverage. A real interactive Windows GUI/notification smoke test
+is still required before claiming full Desktop acceptance.

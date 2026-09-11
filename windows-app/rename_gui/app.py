@@ -319,7 +319,7 @@ class DashboardWindow(QMainWindow):
 
     def _on_status_changed(self, status: dict) -> None:
         self.card_tracked.value_lbl.setText(str(status.get("tracked", 0)))   # type: ignore[attr-defined]
-        running = "running" in status.get("daemon", {}).get("status_line", "")
+        running = self.state.daemon.is_running(status)
         installed = "not installed" not in status.get("daemon", {}).get("status_line", "")
         if running:
             self.status_pill.setText("● " + t("daemon_running"))
@@ -328,7 +328,9 @@ class DashboardWindow(QMainWindow):
                 "background:rgba(16,185,129,0.18); color:#10b981;"
             )
             self.pause_btn.setText(t("pause_daemon"))
-            self.pause_btn.setEnabled(True)
+            self.pause_btn.setEnabled(self.state.daemon.can_pause(status))
+            if not self.pause_btn.isEnabled():
+                self.pause_btn.setToolTip(t("daemon_managed_external"))
         elif installed:
             self.status_pill.setText("● " + t("daemon_stopped"))
             self.status_pill.setStyleSheet(
@@ -538,6 +540,26 @@ class SettingsDialog(QDialog):
         form.addRow(t("settings_max_age_days"), self.max_age)
         layout.addWidget(gb)
 
+        # Structured Codex naming section
+        structured_box = QGroupBox(t("settings_section_structured"))
+        structured_form = QFormLayout(structured_box)
+        self.structured_mode = QComboBox()
+        self.structured_mode.addItems(config_store.ALL_STRUCTURED_MODES)
+        self.structured_mode.setCurrentText(self.values.structured_mode)
+        structured_form.addRow(t("settings_structured_mode"), self.structured_mode)
+        self.structured_model = QLineEdit(self.values.structured_model)
+        self.structured_model.setPlaceholderText(config_store.DEFAULT_STRUCTURED_MODEL)
+        structured_form.addRow(t("settings_structured_model"), self.structured_model)
+        self.structured_modules = QLineEdit(
+            ", ".join(self.values.structured_modules)
+        )
+        self.structured_modules.setPlaceholderText(t("settings_structured_modules_hint"))
+        structured_form.addRow(t("settings_structured_modules"), self.structured_modules)
+        note = QLabel(t("settings_structured_note"))
+        note.setWordWrap(True)
+        structured_form.addRow(note)
+        layout.addWidget(structured_box)
+
         # Daemon section
         gb2 = QGroupBox(t("settings_section_daemon"))
         form2 = QFormLayout(gb2)
@@ -583,6 +605,7 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         buttons.button(QDialogButtonBox.Save).setText(t("settings_save"))
+        buttons.button(QDialogButtonBox.Cancel).setText(t("settings_cancel"))
         layout.addWidget(buttons)
 
     @staticmethod
@@ -605,6 +628,13 @@ class SettingsDialog(QDialog):
             tools=[name for name, cb in self.tool_boxes.items() if cb.isChecked()],
             claude_model=self.claude_model.text().strip(),
             codex_model=self.codex_model.text().strip(),
+            structured_mode=self.structured_mode.currentText(),
+            structured_model=self.structured_model.text().strip(),
+            structured_modules=[
+                item.strip()
+                for item in self.structured_modules.text().split(",")
+                if item.strip()
+            ],
         )
         try:
             config_store.save(v)
@@ -713,14 +743,18 @@ class AppState(QObject):
     # ----- actions --------------------------------------------------
 
     def pause_daemon(self) -> None:
-        self.daemon.pause(self.status)
+        changed = self.daemon.pause(self.status)
         self.refresh_status()
-        self.toast("info", t("toast_daemon_paused"))
+        if changed:
+            self.toast("info", t("toast_daemon_paused"))
+        else:
+            self.toast("warning", t("daemon_managed_external"))
 
     def resume_daemon(self) -> None:
-        self.daemon.resume(self.status)
+        changed = self.daemon.resume(self.status)
         self.refresh_status()
-        self.toast("success", t("toast_daemon_resumed"))
+        if changed:
+            self.toast("success", t("toast_daemon_resumed"))
 
     def rename_now(self, session: dict) -> None:
         if not self.cli:
@@ -731,11 +765,17 @@ class AppState(QObject):
         if not sid:
             return
 
-        def do_rename() -> None:
-            self.cli.rename_session(sid, tool)
+        def do_rename() -> dict:
+            return self.cli.rename_session(sid, tool)
 
-        def done(_unused: object) -> None:
-            self.toast("success", t("toast_renamed", session.get("proposed_title") or sid))
+        def done(result: object) -> None:
+            changed = isinstance(result, dict) and bool(result.get("changed"))
+            if changed:
+                self.toast(
+                    "success", t("toast_renamed", session.get("proposed_title") or sid)
+                )
+            else:
+                self.toast("info", t("toast_no_change"))
             self.refresh_sessions()
 
         self._spawn(do_rename, done)
@@ -848,17 +888,20 @@ class TrayIcon(QSystemTrayIcon):
             self.state.resume_daemon()
 
     def _on_status_changed(self, status: dict) -> None:
-        running = "running" in status.get("daemon", {}).get("status_line", "")
+        running = self.state.daemon.is_running(status)
         installed = "not installed" not in status.get("daemon", {}).get("status_line", "")
         if running:
             self.status_action.setText("● " + t("running"))
             self.pause_action.setText(t("pause_daemon"))
+            self.pause_action.setEnabled(self.state.daemon.can_pause(status))
         elif installed:
             self.status_action.setText("● " + t("paused"))
             self.pause_action.setText(t("resume_daemon"))
+            self.pause_action.setEnabled(True)
         else:
             self.status_action.setText("○ " + t("no_daemon"))
             self.pause_action.setText(t("resume_daemon"))
+            self.pause_action.setEnabled(True)
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):

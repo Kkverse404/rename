@@ -20,6 +20,8 @@ uses a **namer** to produce a fresh title and writes it back through the adapter
 | `adapters/` | One file per tool. The *only* code that knows a tool's on-disk format. |
 | `namers/` | Turn a transcript into a short title (heuristic / CLI / API). |
 | `state.py` | Atomic JSON store of "what we already renamed" (content hash + last title). |
+| `session_naming.py` | Opt-in Codex state machine: classify, validate, stage, recover, and protect. |
+| `session_registry.py` | Permanent identity and append-only operations; never pruned with cache state. |
 | `config.py` | Typed defaults + TOML loading. |
 | `service.py` | launchd / systemd install. |
 | `util.py` | Paths, text cleaning, noise filtering, content signatures, title shaping. |
@@ -46,13 +48,32 @@ not officially documented. Each adapter isolates the quirks below.
 
 ### Codex  ✅ stable
 
-- **Location:** titles live in `~/.codex/state_<N>.sqlite` (table `threads`,
-  column `title`, keyed by thread `id`). The full transcript is the rollout JSONL
-  at `threads.rollout_path`.
-- **Title:** `SELECT title FROM threads WHERE id = ?`.
+- **Location:** Codex metadata lives in `~/.codex/state_<N>.sqlite` (table
+  `threads`, keyed by thread `id`). The full transcript is the rollout JSONL at
+  `threads.rollout_path`.
+- **Title:** use a non-empty explicit `name` first, then the generated
+  `title`/`preview` fallback. The adapter preserves raw `name` separately for
+  app-server compare-and-set; a fallback title is never treated as a native
+  explicit name.
 - **Transcript:** rollout `response_item` lines with `payload.type == "message"`.
-- **Write:** `UPDATE threads SET title = ? WHERE id = ?`. The Desktop app reads
-  this column for its thread list.
+- **Write:** start the supported Codex app-server protocol, read the current
+  thread, perform `thread/name/set`, then read it back. Discovery remains
+  read-only SQLite; there is no live SQLite write fallback.
+
+### Opt-in structured Codex workflow
+
+The engine delegates managed Codex sessions to one workflow seam:
+
+```text
+discover -> permanent registry -> bounded classifier -> stage desired title
+         -> app-server compare/write/read -> finalized or recovery
+```
+
+`off` leaves unregistered sessions on the legacy path while continuing to
+protect registered identities. `preview`, `list`, `status`, GUI refresh, and
+dry-run paths stop before allocation, classification, and native mutation.
+The canonical state and recovery contract lives in
+[`docs/STRUCTURED_NAMING.md`](docs/STRUCTURED_NAMING.md).
 
 ### Cursor  ⚠️ experimental
 
@@ -201,13 +222,17 @@ baseline they didn't want to commit to.
 - **Title-only.** It appends/updates a single title field and never edits,
   deletes, or reorders conversations.
 - **Read-only reads.** SQLite reads use a `query_only` connection.
-- **Atomic writes.** Codex is a single `UPDATE`. Cursor takes the write lock up
-  front (`BEGIN IMMEDIATE`), updates both title copies, verifies row counts, and
-  rolls back on any error — a half-update can never be committed. Claude Code is
-  append-only.
+- **Atomic writes.** Structured Codex writes stage durable intent, use the
+  app-server compare/write/read protocol, and recover either half after a
+  restart. Cursor takes the write lock up front (`BEGIN IMMEDIATE`), updates
+  both title copies, verifies row counts, and rolls back on any error — a
+  half-update can never be committed. Claude Code is append-only.
 - **Failure isolation.** If an adapter's `discover()` throws (e.g. a briefly
   locked DB), its state is *not* pruned, so a transient error can never cause the
   next pass to clobber a hand-edited title.
+- **One daemon per state directory.** The daemon holds an OS-level lifetime
+  lock, so Startup, a terminal, and the tray cannot run competing poll loops.
+  It reloads config and rebuilds runtime adapters before every subsequent pass.
 - **Titling via your own logged-in CLI by default.** The default `auto` namer
   reuses the `claude`/`codex` CLI you're signed into (no API key); a short excerpt
   goes to that provider. Those CLI calls are ephemeral (no extra session in your

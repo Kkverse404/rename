@@ -22,7 +22,7 @@ ALL_TOOLS = (
 
 DEFAULT_TOML = """\
 # rename configuration — https://github.com/study8677/rename
-# All times are in seconds. Edit and the daemon picks it up on its next pass.
+# All times are in seconds. A running daemon reloads this file before its next pass.
 
 # Rename a session once it has been idle for this long (default: 5 minutes).
 idle_seconds = 300
@@ -67,6 +67,21 @@ min_user_messages = 1
 # Set true to preview renames without writing anything.
 dry_run = false
 
+# Codex-only stable IDs and one-time structured titles. This is deliberately
+# off by default. "preview" is read-only; "apply" can allocate IDs, call the
+# configured model, and write titles through the Codex app-server protocol.
+[structured_naming]
+mode = "off" # "off" | "preview" | "apply"
+model = "gpt-5.6-terra"
+reasoning_effort = "low"
+modules = [] # allowed labels; empty derives one label from the project folder
+confidence_threshold = 0.80
+idle_seconds = 30
+max_messages = 12
+max_input_chars = 12000
+max_output_bytes = 16384
+timeout_seconds = 90
+
 # Model overrides for the CLI namers (optional). These reuse your existing
 # login — no API key. Defaults are the fast/cheap models, which are plenty for
 # a short title. CLI namers run ephemerally (no extra Claude/Codex session).
@@ -75,6 +90,7 @@ model = "haiku"
 
 [codex]
 model = "gpt-5.3-codex-spark"
+# home = "D:/path/to/codex-home" # otherwise CODEX_HOME, then ~/.codex
 
 # Bring-your-own-key namers. To use one, set `namer` above to "anthropic" or
 # "openai" and provide a key below (or via the matching environment variable).
@@ -90,6 +106,30 @@ model = "gpt-4o-mini"
 
 
 @dataclass
+class StructuredNamingConfig:
+    """Effective settings for the opt-in Codex structured naming workflow."""
+
+    mode: str = "off"
+    model: str = "gpt-5.6-terra"
+    reasoning_effort: str = "low"
+    modules: tuple[str, ...] = ()
+    confidence_threshold: float = 0.80
+    idle_seconds: int = 30
+    max_messages: int = 12
+    max_input_chars: int = 12_000
+    max_output_bytes: int = 16_384
+    timeout_seconds: int = 90
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode != "off"
+
+    @property
+    def applies(self) -> bool:
+        return self.mode == "apply"
+
+
+@dataclass
 class Config:
     idle_seconds: int = 300
     poll_seconds: int = 60
@@ -99,6 +139,8 @@ class Config:
     max_age_days: int = 7
     min_user_messages: int = 1
     dry_run: bool = False
+    codex_home: str | None = None
+    structured_naming: StructuredNamingConfig = field(default_factory=StructuredNamingConfig)
     raw: dict[str, Any] = field(default_factory=dict)
 
     def namer_options(self, name: str) -> dict[str, Any]:
@@ -127,8 +169,53 @@ def load(path: Path | None = None) -> Config:
     cfg.min_user_messages = int(raw.get("min_user_messages", cfg.min_user_messages))
     cfg.dry_run = bool(raw.get("dry_run", cfg.dry_run))
 
+    codex = raw.get("codex")
+    if isinstance(codex, dict):
+        home = codex.get("home")
+        if isinstance(home, str) and home.strip():
+            cfg.codex_home = home.strip()
+
+    structured = raw.get("structured_naming")
+    if isinstance(structured, dict):
+        mode = str(structured.get("mode", "off")).strip().lower()
+        if mode not in {"off", "preview", "apply"}:
+            util.log(
+                "structured_naming.mode must be off, preview, or apply; "
+                f"got {mode!r}. Structured naming is disabled.",
+                level="warn",
+            )
+            mode = "off"
+        modules = structured.get("modules", [])
+        module_values = (
+            tuple(str(value).strip() for value in modules if str(value).strip())
+            if isinstance(modules, list)
+            else ()
+        )
+        try:
+            threshold = float(structured.get("confidence_threshold", 0.80))
+        except (TypeError, ValueError):
+            threshold = 0.80
+        cfg.structured_naming = StructuredNamingConfig(
+            mode=mode,
+            model=str(structured.get("model", "gpt-5.6-terra")).strip()
+            or "gpt-5.6-terra",
+            reasoning_effort=(
+                str(structured.get("reasoning_effort", "low")).strip().lower()
+                if str(structured.get("reasoning_effort", "low")).strip().lower()
+                in {"low", "medium", "high", "xhigh", "max", "ultra"}
+                else "low"
+            ),
+            modules=module_values,
+            confidence_threshold=min(1.0, max(0.0, threshold)),
+            idle_seconds=max(0, int(structured.get("idle_seconds", 30))),
+            max_messages=max(1, int(structured.get("max_messages", 12))),
+            max_input_chars=max(256, int(structured.get("max_input_chars", 12_000))),
+            max_output_bytes=max(256, int(structured.get("max_output_bytes", 16_384))),
+            timeout_seconds=max(1, int(structured.get("timeout_seconds", 90))),
+        )
+
     tools = raw.get("tools")
-    if isinstance(tools, list) and tools:
+    if isinstance(tools, list):
         cfg.tools = tuple(str(t) for t in tools if t in ALL_TOOLS)
     return cfg
 

@@ -43,6 +43,29 @@ No API key required. Zero runtime dependencies. Works on macOS, Linux, and Windo
 
 <br>
 
+## Stable Codex IDs (opt-in)
+
+Codex can use one-time structured titles. A new thread receives a machine-wide
+monotonic number, then becomes a frozen title such as
+`#631-Confidence Fix concurrent Batch Writer updates` once its task is clear.
+The mode is off by default.
+
+```toml
+[structured_naming]
+mode = "preview" # "off" | "preview" | "apply"
+model = "gpt-5.6-terra"
+modules = ["Confidence", "Workflow"]
+```
+
+`preview`, `rename list`, `rename status`, and every dry-run path allocate no
+IDs, call no model, and write no title. Only `apply` registers and processes
+eligible new Codex threads. An external title edit remains protected until
+`rename naming reopen #631`; `rename naming rollback #631` restores the title
+captured before the managed write. See the
+[structured naming contract](docs/STRUCTURED_NAMING.md) for the full behavior.
+
+<br>
+
 ## Use
 
 ```bash

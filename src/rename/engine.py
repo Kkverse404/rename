@@ -28,6 +28,7 @@ from .adapters.base import Adapter
 from .config import Config
 from .models import RenamePlan, Session
 from .namers.base import Namer
+from .session_naming import SessionNamingWorkflow, is_historical_session
 from .state import StateStore
 
 
@@ -38,11 +39,13 @@ class Engine:
         adapters: list[Adapter],
         namer: Namer,
         state: StateStore,
+        session_naming: SessionNamingWorkflow | None = None,
     ):
         self.cfg = cfg
         self.adapters = adapters
         self.namer = namer
         self.state = state
+        self.session_naming = session_naming
 
     # -- assessment (never calls the namer) -------------------------------- #
     def _assess(
@@ -109,6 +112,13 @@ class Engine:
         *,
         include_historical: bool = False,
     ) -> RenamePlan:
+        if self.session_naming and self.session_naming.handles(s):
+            historical = is_historical_session(
+                s,
+                self.state.baseline(),
+                include_historical=include_historical,
+            )
+            return self.session_naming.preview(s, now_ts, historical=historical)
         status, sig, msgs = self._assess(
             adapter, s, now_ts, include_historical=include_historical
         )
@@ -135,25 +145,14 @@ class Engine:
             return RenamePlan(
                 s, "skip", content_sig=sig, mark_seen=True, reason="unchanged since last rename"
             )
-        title = self._name(adapter, s, msgs)
-        if not title:
-            return RenamePlan(s, "skip", reason="namer returned nothing")
-        if s.title and title.casefold() == s.title.casefold():
-            return RenamePlan(
-                s,
-                "skip",
-                new_title=title,
-                content_sig=sig,
-                mark_seen=True,
-                reason="already current",
-            )
         return RenamePlan(
             s,
             "rename",
-            new_title=title,
             content_sig=sig,
-            mark_seen=True,
-            reason=f"idle {util.fmt_dur(s.idle_seconds(now_ts))}",
+            reason=(
+                f"eligible after {util.fmt_dur(s.idle_seconds(now_ts))} idle; "
+                "title is generated only during apply"
+            ),
         )
 
     def plan(self, now_ts: float | None = None, *, include_historical: bool = False):
@@ -191,6 +190,7 @@ class Engine:
         self,
         limit: int | None = None,
         progress: bool = False,
+        quiet: bool = False,
         session_filter: set[str] | None = None,
         include_historical: bool = False,
     ) -> tuple[int, int]:
@@ -204,12 +204,19 @@ class Engine:
         watching this machine (the GUI's "Rename historical sessions" button).
         Returns (renamed, total_candidates)."""
         now_ts = util.now()
+        pure_structured_pass = bool(
+            self.session_naming
+            and self.session_naming.read_only
+            and all(adapter.name == "codex" for adapter in self.adapters)
+        )
+        state_writes_enabled = not self.cfg.dry_run and not pure_structured_pass
         # On the very first pass we record a baseline so future automatic
         # passes only touch newly-active conversations. Per-session forced
         # renames and explicit historical passes bypass this.
         baseline_was_set = self.state.baseline() is not None
         if (
-            not baseline_was_set
+            state_writes_enabled
+            and not baseline_was_set
             and session_filter is None
             and not include_historical
         ):
@@ -223,7 +230,7 @@ class Engine:
         if include_historical:
             since = 0.0
 
-        candidates: list[tuple[Adapter, Session, str, list]] = []
+        candidates: list[tuple[Adapter, Session, str | None, list | None, bool]] = []
         alive: set[tuple[str, str]] = set()
         healthy: set[str] = set()
         for adapter in self.adapters:
@@ -234,9 +241,33 @@ class Engine:
                 continue
             healthy.add(adapter.name)
             for s in sessions:
+                # Pruning tracks everything discovered, even when a one-session
+                # operation filters the work performed in this pass.
+                alive.add((adapter.name, s.id))
                 if session_filter is not None and s.id not in session_filter:
                     continue
-                alive.add((adapter.name, s.id))
+                if self.session_naming and self.session_naming.handles(s):
+                    historical = is_historical_session(
+                        s,
+                        self.state.baseline(),
+                        include_historical=(
+                            include_historical or session_filter is not None
+                        ),
+                    )
+                    try:
+                        prepared = self.session_naming.prepare(
+                            s, now_ts, historical=historical
+                        )
+                    except Exception as exc:
+                        util.log(
+                            f"{adapter.name}: structured preparation {s.short_id} "
+                            f"failed safely: {exc}",
+                            level="warn",
+                        )
+                        continue
+                    if prepared.candidate:
+                        candidates.append((adapter, s, None, None, True))
+                    continue
                 try:
                     status, sig, msgs = self._assess(
                         adapter,
@@ -251,8 +282,8 @@ class Engine:
                     )
                     continue
                 if status == "candidate":
-                    candidates.append((adapter, s, sig, msgs))
-                elif not self.cfg.dry_run:
+                    candidates.append((adapter, s, sig, msgs, False))
+                elif state_writes_enabled:
                     self._record_skip(adapter, s, status, sig, now_ts)
 
         candidates.sort(key=lambda c: c[1].last_active, reverse=True)
@@ -268,7 +299,40 @@ class Engine:
             util.log(f"naming {len(candidates)} session(s){extra} via '{self.namer.name}'…")
 
         renamed = 0
-        for i, (adapter, s, sig, msgs) in enumerate(candidates, 1):
+        for i, (adapter, s, sig, msgs, structured) in enumerate(candidates, 1):
+            if structured:
+                assert self.session_naming is not None
+                try:
+                    result = self.session_naming.process(s, adapter.read_transcript)
+                except Exception as exc:
+                    util.log(
+                        f"{adapter.name}: structured naming {s.short_id} "
+                        f"failed safely: {exc}",
+                        level="warn",
+                    )
+                    continue
+                if result.renamed:
+                    renamed += 1
+                    if not quiet:
+                        tag = f"[{i}/{len(candidates)}] " if progress else ""
+                        util.log(
+                            f"{tag}{adapter.name} #{result.display_id} {s.short_id}: "
+                            f"{s.title!r} → {result.title!r}"
+                        )
+                elif progress and result.reason:
+                    util.log(
+                        f"[{i}/{len(candidates)}] {adapter.name} "
+                        f"#{result.display_id or '?'}: {result.reason}"
+                    )
+                continue
+            assert sig is not None and msgs is not None
+            if self.cfg.dry_run:
+                if not quiet:
+                    util.log(
+                    f"[dry-run] {adapter.name} {s.short_id}: eligible; "
+                    "no model call or write"
+                    )
+                continue
             try:
                 title = self._name(adapter, s, msgs)
             except Exception as exc:
@@ -284,9 +348,6 @@ class Engine:
                         title=title, last_seen=now_ts,
                     )
                 continue
-            if self.cfg.dry_run:
-                util.log(f"[dry-run] {adapter.name} {s.short_id}: {s.title!r} → {title!r}")
-                continue
             try:
                 adapter.set_title(s, title)
             except Exception as exc:
@@ -298,24 +359,30 @@ class Engine:
                 title=title, renamed_at=now_ts, last_seen=now_ts,
             )
             renamed += 1
-            tag = f"[{i}/{len(candidates)}] " if progress else ""
-            util.log(f"{tag}{adapter.name} {s.short_id}: {s.title!r} → {title!r}")
+            if not quiet:
+                tag = f"[{i}/{len(candidates)}] " if progress else ""
+                util.log(f"{tag}{adapter.name} {s.short_id}: {s.title!r} → {title!r}")
 
-        if not self.cfg.dry_run:
+        if state_writes_enabled:
             self.state.prune(alive, healthy)
             self.state.save()
         return renamed, total
 
-    def run_forever(self, stop: Callable[[], bool] | None = None) -> None:
+    def run_forever(
+        self,
+        stop: Callable[[], bool] | None = None,
+        reload: Callable[[], "Engine"] | None = None,
+    ) -> None:
         util.log(
             f"rename started — idle={util.fmt_dur(self.cfg.idle_seconds)}, "
             f"poll={util.fmt_dur(self.cfg.poll_seconds)}, namer={self.namer.name}, "
             f"batch={self.cfg.batch_size or '∞'}, tools={[a.name for a in self.adapters]}"
             + (" [DRY-RUN]" if self.cfg.dry_run else "")
         )
+        current = self
         while True:
             try:
-                renamed, total = self.tick()
+                renamed, total = current.tick()
                 if renamed:
                     more = f" ({total - renamed} more queued)" if total > renamed else ""
                     util.log(f"renamed {renamed} session(s){more}")
@@ -323,7 +390,12 @@ class Engine:
                 util.log(f"pass failed: {exc}", level="error")
             if stop and stop():
                 break
-            time.sleep(self.cfg.poll_seconds)
+            time.sleep(current.cfg.poll_seconds)
+            if reload is not None:
+                try:
+                    current = reload()
+                except Exception as exc:
+                    util.log(f"config reload failed; keeping prior values: {exc}", level="warn")
 
 
 def substantive_only(msgs: list) -> list:

@@ -5,6 +5,7 @@ import time
 from rename import cli
 from rename.config import Config
 from rename.models import Message, Session
+from rename.session_registry import SessionRegistry
 
 
 class FakeAdapter:
@@ -131,3 +132,189 @@ def test_stats_table(capsys, monkeypatch):
     assert rc == 0
     assert "FakeTool" in out
     assert "Total" in out
+
+
+def test_naming_status_is_pure_read_when_registry_is_absent(
+    tmp_path, capsys, monkeypatch
+):
+    path = tmp_path / "registry.sqlite3"
+    monkeypatch.setattr(cli.util, "registry_path", lambda: path)
+
+    rc = cli.cmd_naming_status(_args(json=True))
+
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert data["counts"]["total"] == 0
+    assert data["sessions"] == []
+    assert not path.exists()
+
+
+def _finalized_registry(path):
+    registry = SessionRegistry(path)
+    registry.ensure("codex", "thread-1")
+    registry.stage_write(
+        "codex",
+        "thread-1",
+        expected="Original",
+        original="Original",
+        desired="#1-repo Stable title",
+        module="repo",
+        summary="Stable title",
+        decision={"ready": True},
+    )
+    registry.finalize("codex", "thread-1", observed="#1-repo Stable title")
+    return registry
+
+
+def test_naming_reopen_preserves_display_id(tmp_path, capsys, monkeypatch):
+    path = tmp_path / "registry.sqlite3"
+    registry = _finalized_registry(path)
+    monkeypatch.setattr(cli.util, "registry_path", lambda: path)
+    monkeypatch.setattr(cli.config_mod, "load", lambda: Config())
+
+    rc = cli.cmd_naming_reopen(_args(session="#1", json=True))
+
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert data["display_id"] == 1
+    assert data["status"] == "pending"
+    assert registry.get("codex", "thread-1").display_id == 1
+
+
+def test_naming_rollback_compares_restores_and_marks_registry(
+    tmp_path, capsys, monkeypatch
+):
+    path = tmp_path / "registry.sqlite3"
+    registry = _finalized_registry(path)
+    monkeypatch.setattr(cli.util, "registry_path", lambda: path)
+    monkeypatch.setattr(cli.config_mod, "load", lambda: Config())
+    session = Session(
+        "codex",
+        "thread-1",
+        "#1-repo Stable title",
+        last_active=time.time(),
+        meta={"updated_at": time.time()},
+    )
+
+    class Writer:
+        def __init__(self):
+            self.calls = []
+
+        def set_title(self, thread_id, title, **kwargs):
+            self.calls.append((thread_id, title, kwargs["expected_title"]))
+
+    writer = Writer()
+
+    class Codex:
+        def __init__(self, codex_home=None):
+            self.writer = writer
+
+        def available(self):
+            return True
+
+        def discover(self, since):
+            return [session]
+
+    monkeypatch.setattr(cli, "CodexAdapter", Codex)
+
+    rc = cli.cmd_naming_rollback(_args(session="thread-1", json=True))
+
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert writer.calls == [("thread-1", "Original", "#1-repo Stable title")]
+    assert data["restored_title"] == "Original"
+    assert registry.get("codex", "thread-1").status == "rolled_back"
+
+
+def test_parser_exposes_structured_naming_operator_commands():
+    parser = cli.build_parser()
+
+    assert parser.parse_args(["naming", "status"]).func is cli.cmd_naming_status
+    assert parser.parse_args(["naming", "reopen", "#7"]).func is cli.cmd_naming_reopen
+    assert parser.parse_args(["naming", "rollback", "thread-7"]).func is cli.cmd_naming_rollback
+
+
+def test_global_dry_run_blocks_reopen_and_rollback_mutations(
+    tmp_path, capsys, monkeypatch
+):
+    path = tmp_path / "registry.sqlite3"
+    registry = _finalized_registry(path)
+    before = registry.operations("codex", "thread-1")
+    monkeypatch.setattr(cli.util, "registry_path", lambda: path)
+    monkeypatch.setattr(cli.config_mod, "load", lambda: Config(dry_run=True))
+
+    assert cli.cmd_naming_reopen(_args(session="#1", json=True)) == 0
+    reopen = json.loads(capsys.readouterr().out)
+    assert reopen["dry_run"] is True
+    assert cli.cmd_naming_rollback(_args(session="#1", json=True)) == 0
+    rollback = json.loads(capsys.readouterr().out)
+
+    assert rollback["dry_run"] is True
+    assert registry.get("codex", "thread-1").status == "finalized"
+    assert registry.operations("codex", "thread-1") == before
+
+
+def test_once_dry_run_does_not_create_default_config(monkeypatch):
+    args = cli.build_parser().parse_args(["once", "--dry-run"])
+    monkeypatch.setattr(cli.config_mod, "load", lambda: Config())
+
+    def unexpected_config_write():
+        raise AssertionError("dry-run must not create a config file")
+
+    class FakeEngine:
+        def tick(self, **kwargs):
+            return 0, 0
+
+    monkeypatch.setattr(cli.config_mod, "ensure_default", unexpected_config_write)
+    monkeypatch.setattr(
+        cli,
+        "_build",
+        lambda cfg: ([object()], type("Namer", (), {"name": "heuristic"})(), None, FakeEngine()),
+    )
+
+    assert cli.cmd_run(args) == 0
+
+
+def test_once_json_reports_whether_any_title_changed(capsys, monkeypatch):
+    args = cli.build_parser().parse_args(["once", "--dry-run", "--json"])
+    monkeypatch.setattr(cli.config_mod, "load", lambda: Config())
+
+    class FakeEngine:
+        def tick(self, **kwargs):
+            assert kwargs["progress"] is False
+            assert kwargs["quiet"] is True
+            return 0, 1
+
+    monkeypatch.setattr(
+        cli,
+        "_build",
+        lambda cfg: ([object()], type("Namer", (), {"name": "heuristic"})(), None, FakeEngine()),
+    )
+
+    assert cli.cmd_run(args) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "renamed": 0,
+        "candidates": 1,
+        "changed": False,
+    }
+
+
+def test_daemon_reload_preserves_limit_override(tmp_path, monkeypatch):
+    args = cli.build_parser().parse_args(["run", "--limit", "3"])
+    seen = []
+    monkeypatch.setattr(cli.config_mod, "load", lambda: Config(batch_size=25))
+    monkeypatch.setattr(cli.config_mod, "ensure_default", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(cli.util, "daemon_lock_path", lambda: tmp_path / "daemon.lock")
+
+    class FakeEngine:
+        def run_forever(self, reload):
+            reload()
+
+    def fake_build(cfg):
+        seen.append(cfg.batch_size)
+        return [object()], type("Namer", (), {"name": "heuristic"})(), None, FakeEngine()
+
+    monkeypatch.setattr(cli, "_build", fake_build)
+
+    assert cli.cmd_run(args) == 0
+    assert seen == [3, 3]

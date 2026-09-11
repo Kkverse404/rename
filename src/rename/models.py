@@ -26,7 +26,7 @@ class Session:
 
     tool: str  # adapter name, e.g. "claude-code"
     id: str  # session / thread / composer id
-    title: str | None  # current title, if any
+    title: str | None  # effective display title, if any
     last_active: float  # epoch seconds of last activity
     cwd: str | None = None  # working directory / project path, if known
     meta: dict[str, Any] = field(default_factory=dict)
@@ -34,6 +34,20 @@ class Session:
     @property
     def short_id(self) -> str:
         return self.id[:8] if self.id else "?"
+
+    @property
+    def native_title(self) -> str | None:
+        """Return the title value owned by the native write API.
+
+        Codex distinguishes its explicit ``name`` from the generated
+        ``title``/``preview`` shown as a fallback. Other adapters expose only
+        one title, so their native and effective values are identical.
+        """
+
+        if "native_name" in self.meta:
+            value = self.meta["native_name"]
+            return value if isinstance(value, str) else None
+        return self.title
 
     def idle_seconds(self, now: float) -> float:
         return max(0.0, now - self.last_active)
@@ -51,3 +65,5 @@ class RenamePlan:
     # True once we've fully read+evaluated this exact state, so the next pass
     # can skip re-reading the transcript while last_active is unchanged.
     mark_seen: bool = False
+    display_id: int | None = None
+    naming_status: str | None = None
