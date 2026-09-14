@@ -13,6 +13,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
+from ..codex_executable import resolve_codex_executable
 from ..windows_batch import UnsafeBatchArgument, batch_command
 
 
@@ -95,16 +96,12 @@ _ClientFactory = Callable[[str | list[str], dict[str, str], float], Any]
 
 def _resolved_executable(executable: str | os.PathLike[str]) -> str:
     raw = os.fspath(executable)
-    found = shutil.which(raw)
-    if found is None:
-        candidate = Path(raw).expanduser()
-        if candidate.is_file():
-            found = str(candidate)
+    found = resolve_codex_executable(raw)
     if found is None:
         raise CodexProcessError(
             f"Codex executable {raw!r} was not found; install Codex or pass its full path"
         )
-    return str(Path(found).resolve())
+    return found
 
 
 def _app_server_command(

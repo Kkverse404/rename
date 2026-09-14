@@ -7,7 +7,7 @@ import pytest
 from rename.adapters.codex_writer import CodexProcessError
 from rename.config import StructuredNamingConfig
 from rename.models import Message, Session
-from rename.namers.structured_codex import NamingDecision
+from rename.namers.structured_codex import ClassifierUnavailableError, NamingDecision
 from rename.session_naming import SessionNamingWorkflow, is_historical_session
 from rename.session_registry import InvalidTransitionError, SessionRegistry
 
@@ -185,6 +185,33 @@ def test_unclear_decision_is_cached_without_write(tmp_path):
     assert classifier.calls == 1
     assert writer.writes == []
     assert registry.get("codex", session.id).decision["reason_code"] == "ambiguous"
+
+
+def test_classifier_failure_retries_after_backoff_without_new_activity(tmp_path):
+    workflow, registry, classifier, writer = _workflow(tmp_path)
+    classifier.error = ClassifierUnavailableError("Codex executable was not found")
+    session = _session()
+    messages = [Message("user", "修复自动会话命名")]
+    workflow.prepare(session, time.time(), historical=False)
+
+    failed = workflow.process(session, lambda _session: messages)
+    failed_record = registry.get("codex", session.id)
+
+    assert failed.status == "pending"
+    assert failed_record is not None
+    assert failed_record.decision["reason_code"] == "classifier_error"
+    assert not workflow.prepare(
+        session, failed_record.updated_at + 299, historical=False
+    ).candidate
+
+    classifier.error = None
+    retry = workflow.prepare(session, failed_record.updated_at + 300, historical=False)
+    recovered = workflow.process(session, lambda _session: messages)
+
+    assert retry.candidate
+    assert recovered.status == "finalized"
+    assert classifier.calls == 2
+    assert writer.writes == [(session.id, "#1- 修复并发标题写入", "Old")]
 
 
 def test_ready_requires_real_evidence_and_allowed_module(tmp_path):

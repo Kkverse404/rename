@@ -141,3 +141,14 @@ the structured Codex naming work order.
 - Final verification after the refinement: Ruff passed, `176 passed`,
   `git diff --check` passed, and the live synthetic `gpt-5.6-terra` evaluation
   passed `8/8` with concise raw summaries before program-side bounding.
+
+## Follow-up Windows startup recovery
+
+- Live diagnosis found that the Windows login-startup daemon inherited a PATH
+  without the Codex Desktop app-local `bin` directory. The daemon stayed alive,
+  but structured decisions safely remained pending with
+  `ClassifierUnavailableError`.
+- Classifier and writer executable lookup now share one resolver that falls back
+  to the current Codex Desktop installation. Cached classifier failures retry
+  after five minutes without weakening the unchanged-content cache for genuinely
+  ambiguous tasks.

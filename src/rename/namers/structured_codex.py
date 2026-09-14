@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from ..codex_executable import resolve_codex_executable
 from ..models import Message
 from ..util import clean_text, is_noise
 from ..windows_batch import UnsafeBatchArgument, batch_command
@@ -279,7 +280,7 @@ class StructuredCodexNamer:
         self.max_response_bytes = max_response_bytes
         self.max_messages = max_messages
         self.max_input_chars = max_input_chars
-        self.executable = shutil.which(executable)
+        self.executable = resolve_codex_executable(executable)
         self.codex_home = None if codex_home is None else os.fspath(codex_home)
 
     def available(self) -> bool:

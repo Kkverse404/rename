@@ -26,6 +26,13 @@ All notable changes to this project are documented here. Format loosely follows
   subsequent pass. Windows GUI actions report protected/no-change sessions
   without claiming a rename occurred.
 
+### Fixed
+
+- The Windows login-startup daemon now resolves the Codex Desktop executable
+  even when Codex's app-local `bin` directory is absent from `PATH`.
+- Transient structured-classifier failures retry after a bounded backoff instead
+  of remaining pending until the conversation changes.
+
 ## [1.0.1] - 2026-08-19
 
 ### Fixed

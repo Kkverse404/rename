@@ -5,6 +5,7 @@ import sys
 
 import pytest
 
+import rename.codex_executable as codex_executable
 from rename.adapters.codex_writer import (
     CodexConflictError,
     CodexEOFError,
@@ -262,3 +263,16 @@ def test_cmd_launcher_uses_comspec_and_keeps_json_out_of_argv(tmp_path):
     assert str(batch.resolve()) in argv
     assert "app-server" in argv and "--stdio" in argv
     assert "threadId" not in argv
+
+
+def test_app_server_resolves_windows_desktop_codex_without_path(monkeypatch, tmp_path):
+    executable = tmp_path / "OpenAI" / "Codex" / "bin" / "build-id" / "codex.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"codex")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(codex_executable.shutil, "which", lambda name: None)
+    monkeypatch.setattr(codex_executable.sys, "platform", "win32")
+
+    argv = _app_server_command("codex", {})
+
+    assert argv == [str(executable.resolve()), "app-server", "--stdio"]

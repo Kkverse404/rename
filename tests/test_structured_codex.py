@@ -3,6 +3,7 @@ import subprocess
 
 import pytest
 
+import rename.codex_executable as codex_executable
 import rename.namers.structured_codex as subject
 from rename.config import StructuredNamingConfig
 from rename.models import Message
@@ -171,7 +172,7 @@ def test_configurable_model_and_resolved_executable(monkeypatch):
     target = subject.StructuredCodexNamer(model="custom-model")
     assert target.available()
     argv = target._argv("schema.json", "output.json")
-    assert argv[0] == r"D:\Codex\codex.exe"
+    assert argv[0].casefold() == r"D:\Codex\codex.exe".casefold()
     assert argv[argv.index("--model") + 1] == "custom-model"
 
 
@@ -195,12 +196,27 @@ def test_windows_batch_executable_uses_controlled_comspec_wrapper(monkeypatch, s
     assert "中文 prompt & literal" not in argv
 
 
-def test_available_is_false_when_executable_does_not_resolve(monkeypatch):
+def test_available_is_false_when_executable_does_not_resolve(monkeypatch, tmp_path):
     monkeypatch.setattr(subject.shutil, "which", lambda name: None)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     target = subject.StructuredCodexNamer()
     assert not target.available()
     with pytest.raises(subject.ClassifierUnavailableError):
         target.classify([], cwd=None, modules=())
+
+
+def test_windows_desktop_executable_resolves_without_path(monkeypatch, tmp_path):
+    executable = tmp_path / "OpenAI" / "Codex" / "bin" / "build-id" / "codex.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"codex")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(subject.shutil, "which", lambda name: None)
+    monkeypatch.setattr(codex_executable.sys, "platform", "win32")
+
+    target = subject.StructuredCodexNamer()
+
+    assert target.executable == str(executable.resolve())
+    assert target.available()
 
 
 def test_evaluator_classifier_uses_the_production_config_window(monkeypatch):

@@ -34,6 +34,7 @@ _MAX_CJK_SUMMARY_CHARS = 24
 _MAX_NON_CJK_SUMMARY_CHARS = 64
 _MAX_NON_CJK_SUMMARY_WORDS = 8
 _TRAILING_TITLE_PUNCTUATION = " \t,，、:：;；.!！?？。"
+_CLASSIFIER_ERROR_RETRY_SECONDS = 300
 
 
 class NativeTitleWriter(Protocol):
@@ -286,7 +287,14 @@ class SessionNamingWorkflow:
                 status=record.status,
                 reason="awaiting idle threshold",
             )
-        if record.last_evaluated_active == session.last_active:
+        classifier_failed = bool(
+            record.decision and record.decision.get("reason_code") == "classifier_error"
+        )
+        retry_due = (
+            classifier_failed
+            and now_ts - record.updated_at >= _CLASSIFIER_ERROR_RETRY_SECONDS
+        )
+        if record.last_evaluated_active == session.last_active and not retry_due:
             return WorkflowResult(
                 True,
                 display_id=record.display_id,
@@ -566,7 +574,14 @@ class SessionNamingWorkflow:
 
         messages = list(read_transcript(session))
         input_sig = util.signature(messages)
-        if record.input_sig == input_sig and record.decision is not None:
+        cached_classifier_failure = bool(
+            record.decision and record.decision.get("reason_code") == "classifier_error"
+        )
+        if (
+            record.input_sig == input_sig
+            and record.decision is not None
+            and not cached_classifier_failure
+        ):
             self.registry.record_unclear(
                 session.tool,
                 session.id,

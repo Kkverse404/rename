@@ -62,6 +62,10 @@ all validate and confidence meets the configured floor. The classifier receives
 a bounded transcript excerpt and never controls the display ID, title format,
 state transition, or write permission.
 
+Ambiguous or insufficient input stays cached until the conversation changes.
+Classifier execution failures use a separate five-minute retry backoff, so a
+temporarily unavailable executable can recover without another user message.
+
 ## State transitions
 
 ```text
@@ -90,6 +94,10 @@ writer reads the current explicit name first, compares it with the expected
 native name, writes, and then verifies with `thread/read`. Protocol, timeout,
 conflict, and verification failures remain explicit; there is no live SQLite
 fallback.
+When a bare `codex` command is not on `PATH`, Windows also checks the current
+Codex Desktop installation under `%LOCALAPPDATA%\OpenAI\Codex\bin`. The same
+resolver is used for classification and native writes, and selects the newest
+installed `codex.exe` after app updates.
 On Windows, batch launchers are quoted as a complete `cmd.exe` command line;
 paths or options containing `%` are rejected because cmd expands that character
 even inside quotes. Conversation content and title JSON remain on stdin.
