@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import rename.namers.cli_namer as cli_namer
@@ -55,6 +57,7 @@ def test_claude_uses_fast_model_and_clean_output(monkeypatch):
         seen["argv"] = argv
         seen["env"] = kw.get("env")
         seen["cwd"] = kw.get("cwd")
+        seen["creationflags"] = kw.get("creationflags")
         # claude -p prints just the answer text
         return _Proc(stdout="Add CSV export and fix pagination\n")
 
@@ -68,6 +71,8 @@ def test_claude_uses_fast_model_and_clean_output(monkeypatch):
     assert seen["env"]["CLAUDE_CODE_SKIP_PROMPT_HISTORY"] == "1"
     assert seen["cwd"] and seen["cwd"].endswith("namer-scratch")
     assert seen["argv"][-1] == "-p"
+    expected_flags = 0x08000000 if os.name == "nt" else 0
+    assert seen["creationflags"] == expected_flags
 
 
 def test_claude_retries_without_ephemeral_flags_on_unknown_option(monkeypatch):

@@ -19,6 +19,7 @@ import tempfile
 
 from .. import util
 from ..windows_batch import UnsafeBatchArgument, batch_command
+from ..windows_process import background_creationflags
 from .base import INSTRUCTION, Namer, build_excerpt
 
 _TIMEOUT = 90  # codex with reasoning can take a while; keep generous
@@ -86,6 +87,7 @@ def _run(
             env=merged,
             cwd=cwd,
             input=input_text,
+            creationflags=background_creationflags(),
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         util.log(f"{argv[0]} namer call failed: {exc}", level="debug")

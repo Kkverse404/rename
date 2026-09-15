@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 
 import pytest
@@ -165,6 +166,8 @@ def test_command_has_all_safety_flags_and_bounded_evidence(monkeypatch):
     assert seen["schema"]["additionalProperties"] is False
     assert seen["schema"]["properties"]["summary"]["maxLength"] == 64
     assert seen["kwargs"]["shell"] is False
+    expected_flags = 0x08000000 if os.name == "nt" else 0
+    assert seen["kwargs"]["creationflags"] == expected_flags
 
 
 def test_configurable_model_and_resolved_executable(monkeypatch):

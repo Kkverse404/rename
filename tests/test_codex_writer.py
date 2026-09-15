@@ -5,6 +5,7 @@ import sys
 
 import pytest
 
+import rename.adapters.codex_writer as codex_writer
 import rename.codex_executable as codex_executable
 from rename.adapters.codex_writer import (
     CodexConflictError,
@@ -184,6 +185,21 @@ def _transport(code, *, timeout=1):
     return _StdioJsonRpcClient(
         [sys.executable, "-u", "-c", code], env, timeout
     )
+
+
+def test_stdio_client_hides_windows_console(monkeypatch):
+    seen = {}
+
+    def fake_popen(argv, **kwargs):
+        seen.update(kwargs)
+        raise OSError("stop after launch options are captured")
+
+    monkeypatch.setattr(codex_writer.subprocess, "Popen", fake_popen)
+    with pytest.raises(CodexProcessError, match="could not start"):
+        _StdioJsonRpcClient(["codex.exe", "app-server", "--stdio"], {}, 1)
+
+    expected_flags = 0x08000000 if os.name == "nt" else 0
+    assert seen["creationflags"] == expected_flags
 
 
 def test_stdio_client_ignores_notifications_and_round_trips_unicode():

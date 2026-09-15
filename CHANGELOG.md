@@ -28,6 +28,8 @@ All notable changes to this project are documented here. Format loosely follows
 
 ### Fixed
 
+- Background CLI, structured-classifier, and app-server child processes no
+  longer flash console windows on Windows.
 - The Windows login-startup daemon now resolves the Codex Desktop executable
   even when Codex's app-local `bin` directory is absent from `PATH`.
 - Transient structured-classifier failures retry after a bounded backoff instead

@@ -15,6 +15,7 @@ from typing import Any, Callable
 
 from ..codex_executable import resolve_codex_executable
 from ..windows_batch import UnsafeBatchArgument, batch_command
+from ..windows_process import background_creationflags
 
 
 class CodexWriterError(RuntimeError):
@@ -148,6 +149,7 @@ class _StdioJsonRpcClient:
                 errors="replace",
                 bufsize=1,
                 env=env,
+                creationflags=background_creationflags(),
             )
         except (OSError, ValueError) as exc:
             raise CodexProcessError(

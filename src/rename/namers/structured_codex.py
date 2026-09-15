@@ -18,6 +18,7 @@ from ..codex_executable import resolve_codex_executable
 from ..models import Message
 from ..util import clean_text, is_noise
 from ..windows_batch import UnsafeBatchArgument, batch_command
+from ..windows_process import background_creationflags
 
 DEFAULT_MODEL = "gpt-5.6-terra"
 REASON_CODES = frozenset(
@@ -368,6 +369,7 @@ class StructuredCodexNamer:
                     shell=False,
                     input=prompt,
                     env=env,
+                    creationflags=background_creationflags(),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise ClassifierExecutionError(
