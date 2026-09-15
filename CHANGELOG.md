@@ -10,6 +10,9 @@ All notable changes to this project are documented here. Format loosely follows
 - Opt-in Codex structured naming with machine-wide monotonic display IDs,
   validated compact `#ID- summary` titles, permanent human-edit protection,
   explicit reopen/rollback commands, and a recovery-safe registry.
+- Evidence-gated resolved titles. New activity on an unresolved managed thread
+  can advance its title to `#ID- summary（已解决）`; idle time and turn completion
+  alone do not qualify.
 - Config and Windows GUI controls for `off`, `preview`, and `apply` modes.
 
 ### Changed

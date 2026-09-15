@@ -45,10 +45,10 @@ No API key required. Zero runtime dependencies. Works on macOS, Linux, and Windo
 
 ## Stable Codex IDs (opt-in)
 
-Codex can use one-time structured titles. A new thread receives a machine-wide
-monotonic number, then becomes a frozen title such as
-`#631- Fix concurrent updates` once its task is clear. Titles omit the project
-name and keep the summary short. The mode is off by default.
+Codex can use structured titles. A new thread receives a machine-wide monotonic
+number and becomes `#631- Fix concurrent updates` once its task is clear. Strong
+completion evidence advances it to `#631- Fix concurrent updates（已解决）`.
+Titles omit the project name and keep the summary short. The mode is off by default.
 
 ```toml
 [structured_naming]
@@ -58,7 +58,8 @@ model = "gpt-5.6-terra"
 
 `preview`, `rename list`, `rename status`, and every dry-run path allocate no
 IDs, call no model, and write no title. Only `apply` registers and processes
-eligible new Codex threads. An external title edit remains protected until
+eligible new Codex threads. Idle time or a completed turn alone never marks a
+thread resolved; the resolved marker is terminal. An external title edit remains protected until
 `rename naming reopen #631`; `rename naming rollback #631` restores the title
 captured before the managed write. See the
 [structured naming contract](docs/STRUCTURED_NAMING.md) for the full behavior.

@@ -152,3 +152,12 @@ the structured Codex naming work order.
   to the current Codex Desktop installation. Cached classifier failures retry
   after five minutes without weakening the unchanged-content cache for genuinely
   ambiguous tasks.
+
+## Resolved-title lifecycle
+
+- Managed Codex titles now add `（已解决）` only when the bounded classifier
+  identifies direct user confirmation or a completion report with verification
+  and no remaining required work.
+- Finalized unresolved sessions are reviewed only after new activity. The
+  original summary and rollback target remain unchanged, external title edits
+  stay protected, and unresolved decisions are cached until activity changes.

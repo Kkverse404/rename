@@ -61,6 +61,8 @@ def _ready(**changes):
         summary="修复并发标题写入",
         reason_code="explicit_goal",
         evidence_message_ids=["user-1"],
+        resolved=False,
+        resolution_evidence_message_ids=[],
         confidence=0.95,
     )
     values.update(changes)
@@ -145,6 +147,159 @@ def test_ready_decision_stages_writes_and_finalizes(tmp_path):
         "finalized",
     ]
     assert classifier.calls == 1
+
+
+def test_initial_resolved_decision_adds_resolved_suffix(tmp_path):
+    workflow, registry, _classifier, writer = _workflow(
+        tmp_path,
+        decision=_ready(
+            resolved=True,
+            resolution_evidence_message_ids=["assistant-1"],
+        ),
+    )
+    session = _session()
+    workflow.prepare(session, time.time(), historical=False)
+
+    result = workflow.process(
+        session,
+        lambda _session: [
+            Message("user", "修复并发写入"),
+            Message("assistant", "修复已完成，测试通过。"),
+        ],
+    )
+
+    assert result.title == "#1- 修复并发标题写入（已解决）"
+    assert writer.writes == [(session.id, result.title, "Old")]
+    assert registry.get("codex", session.id).summary == "修复并发标题写入"
+
+    session.title = result.title
+    session.last_active += 100
+    protected = workflow.prepare(session, time.time(), historical=False)
+    assert not protected.candidate
+
+
+def test_resolved_decision_without_direct_evidence_is_rejected(tmp_path):
+    workflow, registry, _classifier, writer = _workflow(
+        tmp_path,
+        decision=_ready(resolved=True, resolution_evidence_message_ids=[]),
+    )
+    session = _session()
+    workflow.prepare(session, time.time(), historical=False)
+
+    result = workflow.process(
+        session,
+        lambda _session: [
+            Message("user", "修复并发写入"),
+            Message("assistant", "修复已完成。"),
+        ],
+    )
+
+    assert result.status == "pending"
+    assert "direct evidence" in result.reason
+    assert writer.writes == []
+    assert registry.get("codex", session.id).status == "pending"
+
+
+def test_finalized_title_is_marked_resolved_after_new_verified_activity(tmp_path):
+    workflow, registry, classifier, writer = _workflow(tmp_path)
+    first_active = time.time() - 200
+    session = _session(last_active=first_active)
+    workflow.prepare(session, first_active + 40, historical=False)
+    first = workflow.process(session, lambda _session: [Message("user", "修复并发写入")])
+    session.title = first.title
+    session.last_active = first_active + 100
+    classifier.decision = _ready(
+        resolved=True,
+        resolution_evidence_message_ids=["assistant-1"],
+    )
+
+    prepared = workflow.prepare(session, first_active + 140, historical=False)
+    resolved = workflow.process(
+        session,
+        lambda _session: [
+            Message("user", "修复并发写入"),
+            Message("assistant", "修复完成，179 项测试全部通过。"),
+        ],
+    )
+
+    record = registry.get("codex", session.id)
+    assert prepared.candidate
+    assert resolved.renamed
+    assert resolved.title == "#1- 修复并发标题写入（已解决）"
+    assert writer.writes[-1] == (session.id, resolved.title, first.title)
+    assert record.original_title == "Old"
+    assert [op.operation for op in registry.operations("codex", session.id)] == [
+        "allocated",
+        "write_staged",
+        "finalized",
+        "resolution_write_staged",
+        "finalized",
+    ]
+
+
+def test_finalized_unresolved_review_is_cached_until_activity_changes(tmp_path):
+    workflow, registry, classifier, writer = _workflow(tmp_path)
+    first_active = time.time() - 200
+    session = _session(last_active=first_active)
+    workflow.prepare(session, first_active + 40, historical=False)
+    first = workflow.process(session, lambda _session: [Message("user", "修复并发写入")])
+    session.title = first.title
+    session.last_active = first_active + 100
+
+    prepared = workflow.prepare(session, first_active + 140, historical=False)
+    review = workflow.process(
+        session,
+        lambda _session: [
+            Message("user", "修复并发写入"),
+            Message("assistant", "还在排查失败用例。"),
+        ],
+    )
+    unchanged = workflow.prepare(session, first_active + 180, historical=False)
+
+    assert prepared.candidate
+    assert review.status == "finalized" and not review.renamed
+    assert not unchanged.candidate
+    assert classifier.calls == 2
+    assert len(writer.writes) == 1
+    assert registry.get("codex", session.id).last_evaluated_active == session.last_active
+
+
+def test_finalized_resolution_classifier_failure_retries_after_backoff(tmp_path):
+    workflow, registry, classifier, writer = _workflow(tmp_path)
+    first_active = time.time() - 200
+    session = _session(last_active=first_active)
+    workflow.prepare(session, first_active + 40, historical=False)
+    first = workflow.process(session, lambda _session: [Message("user", "修复并发写入")])
+    session.title = first.title
+    session.last_active = first_active + 100
+    messages = [
+        Message("user", "修复并发写入"),
+        Message("assistant", "修复完成，测试通过。"),
+    ]
+    classifier.error = ClassifierUnavailableError("temporary failure")
+
+    workflow.prepare(session, first_active + 140, historical=False)
+    failed = workflow.process(session, lambda _session: messages)
+    failed_record = registry.get("codex", session.id)
+
+    assert failed.status == "finalized"
+    assert failed_record.decision["reason_code"] == "classifier_error"
+    assert not workflow.prepare(
+        session, failed_record.updated_at + 299, historical=False
+    ).candidate
+
+    classifier.error = None
+    classifier.decision = _ready(
+        resolved=True,
+        resolution_evidence_message_ids=["assistant-1"],
+    )
+    retry = workflow.prepare(session, failed_record.updated_at + 300, historical=False)
+    recovered = workflow.process(session, lambda _session: messages)
+
+    assert retry.candidate
+    assert recovered.title == "#1- 修复并发标题写入（已解决）"
+    assert classifier.calls == 3
+    assert writer.writes[-1] == (session.id, recovered.title, first.title)
 
 
 def test_codex_fallback_display_title_is_separate_from_native_name(tmp_path):

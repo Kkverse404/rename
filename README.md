@@ -43,8 +43,9 @@ uv tool install git+https://github.com/study8677/rename.git
 
 ## Codex 稳定编号（可选）
 
-Codex 可以改用一次性结构化标题：新会话先取得本机全局递增编号，任务明确后写成
-`#631- 修复并发写入`，随后冻结。标题不包含项目名，摘要会压缩成短标题。该模式默认关闭。
+Codex 可以改用结构化标题：新会话先取得本机全局递增编号，任务明确后写成
+`#631- 修复并发写入`；有明确完成证据后变为 `#631- 修复并发写入（已解决）`。
+标题不包含项目名，摘要会压缩成短标题。该模式默认关闭。
 
 ```toml
 [structured_naming]
@@ -53,7 +54,8 @@ model = "gpt-5.6-terra"
 ```
 
 `preview`、`rename list`、`rename status` 和所有 dry-run 路径不分配编号、不调用模型、
-不写标题。切换到 `apply` 后才登记并处理符合条件的新 Codex 会话。人工改过已托管标题
+不写标题。切换到 `apply` 后才登记并处理符合条件的新 Codex 会话。空闲或单轮结束不会
+被当成已解决；解决标记写入后保持不变。人工改过已托管标题
 后，rename 会永久让出控制权；使用 `rename naming reopen #631` 才会重新开放，或用
 `rename naming rollback #631` 恢复登记前标题。完整契约见
 [结构化命名文档](docs/STRUCTURED_NAMING.md)。

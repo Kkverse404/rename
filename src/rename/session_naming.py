@@ -23,6 +23,7 @@ from .namers.structured_codex import (
     NamingClassifier,
     NamingDecision,
     bounded_evidence_ids,
+    bounded_message_ids,
 )
 from .session_registry import RegistryError, SessionRecord, SessionRegistry
 
@@ -35,6 +36,7 @@ _MAX_NON_CJK_SUMMARY_CHARS = 64
 _MAX_NON_CJK_SUMMARY_WORDS = 8
 _TRAILING_TITLE_PUNCTUATION = " \t,，、:：;；.!！?？。"
 _CLASSIFIER_ERROR_RETRY_SECONDS = 300
+_RESOLVED_SUFFIX = "（已解决）"
 
 
 class NativeTitleWriter(Protocol):
@@ -80,6 +82,26 @@ def _decision_data(decision: NamingDecision) -> dict[str, object]:
     return dataclasses.asdict(decision)
 
 
+def _classifier_failure_data(exc: Exception) -> dict[str, object]:
+    return {
+        "ready": False,
+        "module": None,
+        "summary": None,
+        "reason_code": "classifier_error",
+        "evidence_message_ids": [],
+        "resolved": False,
+        "resolution_evidence_message_ids": [],
+        "confidence": 0.0,
+        "error_type": type(exc).__name__,
+    }
+
+
+def _record_is_resolved(record: SessionRecord) -> bool:
+    return bool(
+        record.desired_title and record.desired_title.endswith(_RESOLVED_SUFFIX)
+    ) or bool(record.decision and record.decision.get("resolved") is True)
+
+
 def validate_naming_decision(
     decision: NamingDecision,
     *,
@@ -91,8 +113,15 @@ def validate_naming_decision(
 ) -> tuple[bool, str | None]:
     """Validate authorization fields independently of the model's schema."""
 
-    if not math.isfinite(decision.confidence) or not 0 <= decision.confidence <= 1:
-        return False, "confidence is outside 0..1"
+    _resolved, resolution_error = validate_resolution_decision(
+        decision,
+        messages=messages,
+        confidence_threshold=confidence_threshold,
+        max_messages=max_messages,
+        max_input_chars=max_input_chars,
+    )
+    if resolution_error:
+        return False, resolution_error
     evidence = decision.evidence_message_ids
     if len(evidence) != len(set(evidence)):
         return False, "evidence IDs are duplicated"
@@ -133,6 +162,43 @@ def validate_naming_decision(
     return True, None
 
 
+def validate_resolution_decision(
+    decision: NamingDecision,
+    *,
+    messages: list[Message],
+    confidence_threshold: float,
+    max_messages: int,
+    max_input_chars: int,
+) -> tuple[bool, str | None]:
+    """Validate only the evidence required to add the resolved marker."""
+
+    if not math.isfinite(decision.confidence) or not 0 <= decision.confidence <= 1:
+        return False, "confidence is outside 0..1"
+    evidence = decision.resolution_evidence_message_ids
+    if len(evidence) != len(set(evidence)):
+        return False, "resolution evidence IDs are duplicated"
+    available = set(
+        bounded_message_ids(
+            messages,
+            max_messages=max_messages,
+            max_chars=max_input_chars,
+        )
+    )
+    if any(item not in available for item in evidence):
+        return False, "resolution evidence does not identify an available message"
+    if not decision.resolved:
+        if evidence:
+            return False, "unresolved decision supplies resolution evidence"
+        return False, None
+    if not decision.ready:
+        return False, "an unclear task cannot be resolved"
+    if decision.confidence < confidence_threshold:
+        return False, "resolution confidence is below the configured threshold"
+    if not evidence:
+        return False, "resolved decision has no direct evidence"
+    return True, None
+
+
 def _compact_summary(summary: str) -> str:
     normalized = " ".join(summary.split())
     if any("\u4e00" <= char <= "\u9fff" for char in normalized):
@@ -143,20 +209,23 @@ def _compact_summary(summary: str) -> str:
     return normalized.rstrip(_TRAILING_TITLE_PUNCTUATION)
 
 
-def _format_title(display_id: int, summary: str) -> tuple[str, str]:
+def _format_title(
+    display_id: int, summary: str, *, resolved: bool = False
+) -> tuple[str, str]:
     normalized = _compact_summary(summary)
     prefix = f"#{display_id}- "
-    remaining = _MAX_TITLE_CHARS - len(prefix)
+    suffix = _RESOLVED_SUFFIX if resolved else ""
+    remaining = _MAX_TITLE_CHARS - len(prefix) - len(suffix)
     if remaining < 1:
         raise ValueError("display ID leaves no room for a summary")
     normalized = normalized[:remaining].rstrip()
     if not normalized:
         raise ValueError("summary is empty after title bounding")
-    return prefix + normalized, normalized
+    return prefix + normalized + suffix, normalized
 
 
 class SessionNamingWorkflow:
-    """Coordinate one-time structured names without exposing internal stages."""
+    """Coordinate structured title lifecycle without exposing internal stages."""
 
     def __init__(
         self,
@@ -221,7 +290,7 @@ class SessionNamingWorkflow:
             "pending": "structured: awaiting a clear task",
             "write_pending": "structured: native write recovery pending",
             "recovery": "structured: native state requires recovery",
-            "finalized": "structured: finalized and protected",
+            "finalized": "structured: named and monitored for resolution",
             "manual_override": "structured: user title protected until reopen",
             "rolled_back": "structured: rolled back and protected until reopen",
         }.get(record.status, f"structured: {record.status}")
@@ -270,11 +339,41 @@ class SessionNamingWorkflow:
                 reason="staged rollback requires recovery",
             )
         if record.status == "finalized" and session.native_title == record.desired_title:
+            if _record_is_resolved(record):
+                return WorkflowResult(
+                    True,
+                    display_id=record.display_id,
+                    status=record.status,
+                    reason="resolved and protected",
+                )
+            if session.idle_seconds(now_ts) < self.config.idle_seconds:
+                return WorkflowResult(
+                    True,
+                    display_id=record.display_id,
+                    status=record.status,
+                    reason="awaiting idle threshold before resolution review",
+                )
+            classifier_failed = bool(
+                record.decision
+                and record.decision.get("reason_code") == "classifier_error"
+            )
+            retry_due = (
+                classifier_failed
+                and now_ts - record.updated_at >= _CLASSIFIER_ERROR_RETRY_SECONDS
+            )
+            if record.last_evaluated_active == session.last_active and not retry_due:
+                return WorkflowResult(
+                    True,
+                    display_id=record.display_id,
+                    status=record.status,
+                    reason="finalized; no new activity to review",
+                )
             return WorkflowResult(
+                True,
                 True,
                 display_id=record.display_id,
                 status=record.status,
-                reason="finalized and protected",
+                reason="new activity requires resolution review",
             )
         if record.status in {"write_pending", "recovery", "finalized"}:
             return WorkflowResult(
@@ -518,6 +617,158 @@ class SessionNamingWorkflow:
             title=record.desired_title,
         )
 
+    def _review_finalized(
+        self,
+        session: Session,
+        record: SessionRecord,
+        read_transcript: Callable[[Session], list[Message]],
+    ) -> WorkflowResult:
+        observed = session.native_title
+        if observed != record.desired_title:
+            try:
+                observed = self.writer.read_title(session.id)
+            except CodexWriterError as exc:
+                return WorkflowResult(
+                    True,
+                    True,
+                    display_id=record.display_id,
+                    status=record.status,
+                    reason=f"could not verify apparent external edit: {exc}",
+                )
+        if observed != record.desired_title:
+            overridden = self.registry.manual_override(
+                session.tool,
+                session.id,
+                observed=observed or "",
+                reason="native title changed after finalization",
+            )
+            return WorkflowResult(
+                True,
+                display_id=overridden.display_id,
+                status=overridden.status,
+                reason="external title protected",
+            )
+        if _record_is_resolved(record):
+            return WorkflowResult(
+                True,
+                display_id=record.display_id,
+                status=record.status,
+                reason="resolved and protected",
+            )
+
+        messages = list(read_transcript(session))
+        input_sig = util.signature(messages)
+        cached_classifier_failure = bool(
+            record.decision and record.decision.get("reason_code") == "classifier_error"
+        )
+        if (
+            record.input_sig == input_sig
+            and record.decision is not None
+            and not cached_classifier_failure
+        ):
+            return WorkflowResult(
+                True,
+                display_id=record.display_id,
+                status=record.status,
+                reason="conversation content is unchanged",
+            )
+        try:
+            decision = self.classifier.classify(
+                messages,
+                cwd=session.cwd,
+                modules=self.config.modules,
+            )
+        except Exception as exc:
+            failure = _classifier_failure_data(exc)
+            self.registry.record_finalized_review(
+                session.tool,
+                session.id,
+                decision=failure,
+                input_sig=input_sig,
+                last_evaluated_active=session.last_active,
+            )
+            return WorkflowResult(
+                True,
+                display_id=record.display_id,
+                status=record.status,
+                reason=f"resolution classifier failed safely: {exc}",
+            )
+
+        resolved, validation_error = validate_resolution_decision(
+            decision,
+            messages=messages,
+            confidence_threshold=self.config.confidence_threshold,
+            max_messages=self.config.max_messages,
+            max_input_chars=self.config.max_input_chars,
+        )
+        data = _decision_data(decision)
+        if validation_error:
+            data["validation_error"] = validation_error
+        if not resolved:
+            reviewed = self.registry.record_finalized_review(
+                session.tool,
+                session.id,
+                decision=data,
+                input_sig=input_sig,
+                last_evaluated_active=session.last_active,
+            )
+            return WorkflowResult(
+                True,
+                display_id=reviewed.display_id,
+                status=reviewed.status,
+                reason=validation_error or "task is not resolved",
+                title=reviewed.desired_title,
+            )
+
+        if not record.summary:
+            return WorkflowResult(
+                True,
+                display_id=record.display_id,
+                status=record.status,
+                reason="finalized session has no managed summary",
+            )
+        desired, _summary = _format_title(
+            record.display_id, record.summary, resolved=True
+        )
+        staged = self.registry.stage_resolution(
+            session.tool,
+            session.id,
+            desired=desired,
+            decision=data,
+            input_sig=input_sig,
+            last_evaluated_active=session.last_active,
+        )
+        try:
+            self.writer.set_title(
+                session.id,
+                desired,
+                expected_title=observed,
+                **self._writer_args(session),
+            )
+        except CodexConflictError as exc:
+            return self._resolve_conflict(session, staged, exc.actual_title)
+        except CodexWriterError as exc:
+            recovering = self.registry.recovery(
+                session.tool, session.id, observed=observed, reason=str(exc)
+            )
+            return WorkflowResult(
+                True,
+                True,
+                display_id=recovering.display_id,
+                status=recovering.status,
+                reason=f"resolved title write failed: {exc}",
+                title=desired,
+            )
+        finalized = self.registry.finalize(session.tool, session.id, observed=desired)
+        return WorkflowResult(
+            True,
+            renamed=True,
+            display_id=finalized.display_id,
+            status=finalized.status,
+            reason="resolved title written and verified",
+            title=desired,
+        )
+
     def process(
         self,
         session: Session,
@@ -531,37 +782,7 @@ class SessionNamingWorkflow:
         if record.status == "finalized" and self._rollback_is_staged(session):
             return self._recover_rollback(session, record)
         if record.status == "finalized":
-            observed = session.native_title
-            if observed != record.desired_title:
-                try:
-                    observed = self.writer.read_title(session.id)
-                except CodexWriterError as exc:
-                    return WorkflowResult(
-                        True,
-                        True,
-                        display_id=record.display_id,
-                        status=record.status,
-                        reason=f"could not verify apparent external edit: {exc}",
-                    )
-            if observed == record.desired_title:
-                return WorkflowResult(
-                    True,
-                    display_id=record.display_id,
-                    status=record.status,
-                    reason="finalized and protected",
-                )
-            record = self.registry.manual_override(
-                session.tool,
-                session.id,
-                observed=observed or "",
-                reason="native title changed after finalization",
-            )
-            return WorkflowResult(
-                True,
-                display_id=record.display_id,
-                status=record.status,
-                reason="external title protected",
-            )
+            return self._review_finalized(session, record, read_transcript)
         if record.status in {"manual_override", "rolled_back"}:
             return WorkflowResult(
                 True,
@@ -602,15 +823,7 @@ class SessionNamingWorkflow:
                 modules=self.config.modules,
             )
         except Exception as exc:
-            failure = {
-                "ready": False,
-                "module": None,
-                "summary": None,
-                "reason_code": "classifier_error",
-                "evidence_message_ids": [],
-                "confidence": 0.0,
-                "error_type": type(exc).__name__,
-            }
+            failure = _classifier_failure_data(exc)
             self.registry.record_unclear(
                 session.tool,
                 session.id,
@@ -655,7 +868,11 @@ class SessionNamingWorkflow:
 
         assert decision.module is not None and decision.summary is not None
         try:
-            desired, summary = _format_title(record.display_id, decision.summary)
+            desired, summary = _format_title(
+                record.display_id,
+                decision.summary,
+                resolved=decision.resolved,
+            )
         except ValueError as exc:
             data["validation_error"] = str(exc)
             self.registry.record_unclear(

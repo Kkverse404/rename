@@ -67,7 +67,7 @@ min_user_messages = 1
 # Set true to preview renames without writing anything.
 dry_run = false
 
-# Codex-only stable IDs and one-time structured titles. This is deliberately
+# Codex-only stable IDs and lifecycle-aware structured titles. This is deliberately
 # off by default. "preview" is read-only; "apply" can allocate IDs, call the
 # configured model, and write titles through the Codex app-server protocol.
 [structured_naming]
