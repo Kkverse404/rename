@@ -14,8 +14,6 @@ READY = {
     "summary": "修复中文路径下的会话标题",
     "reason_code": "explicit_goal",
     "evidence_message_ids": ["user-1"],
-    "resolved": False,
-    "resolution_evidence_message_ids": [],
     "confidence": 0.91,
 }
 
@@ -25,15 +23,7 @@ UNCLEAR = {
     "summary": None,
     "reason_code": "insufficient_context",
     "evidence_message_ids": [],
-    "resolved": False,
-    "resolution_evidence_message_ids": [],
     "confidence": 0.2,
-}
-
-RESOLVED = {
-    **READY,
-    "resolved": True,
-    "resolution_evidence_message_ids": ["assistant-1"],
 }
 
 
@@ -56,7 +46,7 @@ def write_result(argv, value, *, multiline=False):
         json.dump(value, output, ensure_ascii=False, indent=2 if multiline else None)
 
 
-@pytest.mark.parametrize("payload", [READY, UNCLEAR, RESOLVED])
+@pytest.mark.parametrize("payload", [READY, UNCLEAR])
 def test_parses_ready_and_unclear_decisions(monkeypatch, payload):
     def fake_run(argv, **kwargs):
         write_result(argv, payload)
@@ -171,11 +161,9 @@ def test_command_has_all_safety_flags_and_bounded_evidence(monkeypatch):
     assert "置信度" in prompt
     assert "6-16 Chinese characters" in prompt
     assert "Omit project/module names" in prompt
-    assert "Do not treat idle or a completed turn as resolved" in prompt
     assert prompt not in argv
     assert seen["schema"]["additionalProperties"] is False
     assert seen["schema"]["properties"]["summary"]["maxLength"] == 64
-    assert seen["schema"]["properties"]["resolved"]["type"] == "boolean"
     assert seen["kwargs"]["shell"] is False
 
 

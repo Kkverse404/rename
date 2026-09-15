@@ -13,10 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from rename.config import StructuredNamingConfig  # noqa: E402
 from rename.models import Message  # noqa: E402
 from rename.namers.structured_codex import classifier_from_config  # noqa: E402
-from rename.session_naming import (  # noqa: E402
-    validate_naming_decision,
-    validate_resolution_decision,
-)
+from rename.session_naming import validate_naming_decision  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -28,7 +25,6 @@ class Case:
     expected_module: str | None = None
     expected_language: str | None = None
     required_summary_terms: tuple[str, ...] = ()
-    expected_resolved: bool = False
 
 
 CASES = (
@@ -112,48 +108,6 @@ CASES = (
         "en",
         ("compare-and-set", "recovery", "workflow"),
     ),
-    Case(
-        "verified_completion_is_resolved",
-        [
-            Message("user", "修复 Windows 启动时找不到 Codex 的问题。"),
-            Message(
-                "assistant",
-                "已修复并部署；登录 PATH 实测可定位 codex.exe，179 项测试全部通过。",
-            ),
-        ],
-        ("workflow",),
-        True,
-        "workflow",
-        "zh",
-        ("Codex", "启动"),
-        expected_resolved=True,
-    ),
-    Case(
-        "diagnosis_only_is_unresolved",
-        [
-            Message("user", "排查 Windows 启动时找不到 Codex 的问题。"),
-            Message("assistant", "已定位原因是登录 PATH 缺少 Codex 目录，尚未修改。"),
-        ],
-        ("workflow",),
-        True,
-        "workflow",
-        "zh",
-        ("Codex", "启动"),
-    ),
-    Case(
-        "user_confirmation_is_resolved",
-        [
-            Message("user", "修复会话自动命名。"),
-            Message("assistant", "已修复并完成回归测试。"),
-            Message("user", "我验证过了，问题解决。"),
-        ],
-        ("workflow",),
-        True,
-        "workflow",
-        "zh",
-        ("会话", "命名"),
-        expected_resolved=True,
-    ),
 )
 
 
@@ -175,19 +129,6 @@ def evaluate(
         failures.append(f"invalid unclear decision: {validation_error}")
     if decision.ready != case.expected_ready:
         failures.append(f"ready={decision.ready}, expected {case.expected_ready}")
-    production_resolved, resolution_error = validate_resolution_decision(
-        decision,
-        messages=case.messages,
-        confidence_threshold=config.confidence_threshold,
-        max_messages=config.max_messages,
-        max_input_chars=config.max_input_chars,
-    )
-    if resolution_error:
-        failures.append(f"invalid resolution decision: {resolution_error}")
-    if production_resolved != case.expected_resolved:
-        failures.append(
-            f"resolved={production_resolved}, expected {case.expected_resolved}"
-        )
     if case.expected_ready:
         if decision.module != case.expected_module:
             failures.append(

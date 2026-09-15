@@ -90,47 +90,6 @@ def test_stage_then_finalize_keeps_write_intent_and_logs_operations(tmp_path):
     ]
 
 
-def test_resolution_write_preserves_original_title_and_summary(tmp_path):
-    registry = SessionRegistry(tmp_path / "registry.sqlite3")
-    registry.ensure("codex", "native-1")
-    registry.stage_write(
-        "codex",
-        "native-1",
-        expected="Old title",
-        original="Old title",
-        desired="#1- 修复并发分配",
-        module="Core",
-        summary="修复并发分配",
-        decision={"ready": True, "resolved": False},
-        input_sig="sha256:one",
-        last_evaluated_active=123.0,
-    )
-    registry.finalize("codex", "native-1")
-
-    staged = registry.stage_resolution(
-        "codex",
-        "native-1",
-        desired="#1- 修复并发分配（已解决）",
-        decision={"ready": True, "resolved": True},
-        input_sig="sha256:two",
-        last_evaluated_active=456.0,
-    )
-    finalized = registry.finalize("codex", "native-1")
-
-    assert staged.status == "write_pending"
-    assert staged.expected_title == "#1- 修复并发分配"
-    assert staged.original_title == "Old title"
-    assert staged.summary == "修复并发分配"
-    assert finalized.desired_title == "#1- 修复并发分配（已解决）"
-    assert [op.operation for op in registry.operations("codex", "native-1")] == [
-        "allocated",
-        "write_staged",
-        "finalized",
-        "resolution_write_staged",
-        "finalized",
-    ]
-
-
 def test_invalid_transition_fails_closed(tmp_path):
     registry = SessionRegistry(tmp_path / "registry.sqlite3")
     registry.ensure("codex", "native-1")

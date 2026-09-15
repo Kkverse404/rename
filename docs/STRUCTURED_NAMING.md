@@ -26,7 +26,6 @@ The program, not the model, formats the final title:
 
 ```text
 #{display_id}- {summary}
-#{display_id}- {summary}（已解决）
 ```
 
 The summary is a compact, single-line task title and cannot contain a managed
@@ -34,12 +33,6 @@ ID prefix. Chinese summaries are bounded to 24 characters; other languages are
 bounded to eight words and 64 characters. Trailing title punctuation is
 removed. The validated classifier module remains internal registry metadata
 and is never included in the visible title.
-
-The resolved suffix is program-owned. It is added only after a validated
-completion decision and is then protected like the rest of the managed title.
-Idle time and a completed turn are not completion evidence. A user must
-explicitly confirm resolution, or an assistant must report the requested
-outcome as complete with concrete verification and no remaining required work.
 
 Codex stores two distinct values: an explicit app-server `thread.name` and a
 generated `title`/`preview` fallback. List, search, status, and the GUI display
@@ -60,8 +53,6 @@ The classifier returns one JSON object:
   "summary": "修复 Batch Writer 并发写入",
   "reason_code": "explicit_goal",
   "evidence_message_ids": ["user-3"],
-  "resolved": true,
-  "resolution_evidence_message_ids": ["assistant-4"],
   "confidence": 0.91
 }
 ```
@@ -70,12 +61,6 @@ The classifier returns one JSON object:
 all validate and confidence meets the configured floor. The classifier receives
 a bounded transcript excerpt and never controls the display ID, title format,
 state transition, or write permission.
-
-After the first managed title is finalized, new conversation activity can
-trigger another bounded classification. An unresolved result is cached until
-the conversation changes. A resolved result keeps the original summary and
-only adds the program-owned suffix; the model cannot rewrite the title during
-this transition.
 
 Ambiguous or insufficient input stays cached until the conversation changes.
 Classifier execution failures use a separate five-minute retry backoff, so a
@@ -90,8 +75,6 @@ unregistered -> pending -> write_pending -> finalized
                     +-> pending (unclear or invalid decision)
 
 finalized -> manual_override (native title changed externally)
-finalized -> finalized       (new activity reviewed; still unresolved)
-finalized -> write_pending -> finalized (resolved suffix staged and verified)
 manual_override -> pending        (explicit reopen only)
 finalized -> rolled_back          (explicit rollback only)
 rolled_back -> pending            (explicit reopen only)
