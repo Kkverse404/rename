@@ -166,12 +166,14 @@ class SessionNamingWorkflow:
         writer: NativeTitleWriter,
         *,
         dry_run: bool = False,
+        verify_native_metadata: bool = True,
     ) -> None:
         self.config = config
         self.registry = registry
         self.classifier = classifier
         self.writer = writer
         self.read_only = dry_run or config.mode == "preview"
+        self.verify_native_metadata = verify_native_metadata
 
     def _get(self, session: Session) -> SessionRecord | None:
         return self.registry.get(session.tool, session.id)
@@ -304,6 +306,8 @@ class SessionNamingWorkflow:
         return WorkflowResult(True, True, display_id=record.display_id, status=record.status)
 
     def _writer_args(self, session: Session) -> dict[str, object]:
+        if not self.verify_native_metadata:
+            return {}
         return {
             "expected_updated_at": session.meta.get("updated_at"),
             "expected_status": session.meta.get("status"),

@@ -32,6 +32,7 @@ class FakeWriter:
         self.error = error
         self.reads = 0
         self.writes: list[tuple[str, str, str | None]] = []
+        self.metadata_checks: list[tuple[object, object]] = []
 
     def read_title(self, thread_id):
         self.reads += 1
@@ -50,6 +51,7 @@ class FakeWriter:
     ):
         if self.error:
             raise self.error
+        self.metadata_checks.append((expected_updated_at, expected_status))
         self.writes.append((thread_id, title, expected_title))
         self.title = title
 
@@ -78,7 +80,15 @@ def _session(*, title="Old", last_active=None, created_at_ms=2_000_000):
     )
 
 
-def _workflow(tmp_path, *, mode="apply", decision=None, writer=None, dry_run=False):
+def _workflow(
+    tmp_path,
+    *,
+    mode="apply",
+    decision=None,
+    writer=None,
+    dry_run=False,
+    verify_native_metadata=True,
+):
     config = StructuredNamingConfig(
         mode=mode,
         modules=("repo",),
@@ -89,9 +99,28 @@ def _workflow(tmp_path, *, mode="apply", decision=None, writer=None, dry_run=Fal
     classifier = FakeClassifier(decision or _ready())
     writer = writer or FakeWriter()
     workflow = SessionNamingWorkflow(
-        config, registry, classifier, writer, dry_run=dry_run
+        config,
+        registry,
+        classifier,
+        writer,
+        dry_run=dry_run,
+        verify_native_metadata=verify_native_metadata,
     )
     return workflow, registry, classifier, writer
+
+
+def test_stop_hook_mode_uses_title_cas_without_volatile_metadata(tmp_path):
+    workflow, _registry, _classifier, writer = _workflow(
+        tmp_path, verify_native_metadata=False
+    )
+    session = _session()
+
+    prepared = workflow.prepare(session, time.time(), historical=False)
+    result = workflow.process(session, lambda _session: [Message("user", "fix it")])
+
+    assert prepared.candidate
+    assert result.renamed
+    assert writer.metadata_checks == [(None, None)]
 
 
 def test_preview_is_pure_read_without_allocation_or_model(tmp_path):

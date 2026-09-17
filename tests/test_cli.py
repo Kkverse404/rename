@@ -13,7 +13,8 @@ def test_codex_stop_hook_processes_only_current_session_without_output(
     tmp_path, monkeypatch, capsys
 ):
     session_id = "thread-123"
-    engine = types.SimpleNamespace()
+    session_naming = types.SimpleNamespace(verify_native_metadata=True)
+    engine = types.SimpleNamespace(session_naming=session_naming)
     calls = []
     engine.tick = lambda **kwargs: calls.append(kwargs) or (1, 1)
     structured = types.SimpleNamespace(idle_seconds=300)
@@ -48,6 +49,7 @@ def test_codex_stop_hook_processes_only_current_session_without_output(
     assert cfg.tools == ("codex",)
     assert cfg.idle_seconds == 0
     assert cfg.structured_naming.idle_seconds == 0
+    assert session_naming.verify_native_metadata is False
     assert calls == [{"limit": 1, "quiet": True, "session_filter": {session_id}}]
     captured = capsys.readouterr()
     assert captured.out == ""

@@ -30,6 +30,9 @@ All notable changes to this project are documented here. Format loosely follows
 
 ### Fixed
 
+- Native Codex `Stop` hooks now keep the title compare-and-set check while
+  ignoring the event's transient `status` and `updatedAt` values, which change
+  as Codex finishes a turn and previously caused false recovery conflicts.
 - Background CLI, structured-classifier, and app-server child processes no
   longer flash console windows on Windows.
 - The Windows login-startup daemon now resolves the Codex Desktop executable

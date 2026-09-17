@@ -390,6 +390,11 @@ def cmd_codex_hook(_args) -> int:
                 if not adapters:
                     util.log("Codex hook skipped: Codex adapter is unavailable", level="warn")
                     return 0
+                if engine.session_naming is not None:
+                    # A Stop event races the app-server's own status/updatedAt
+                    # transition. The title compare-and-set remains authoritative;
+                    # volatile metadata would create a false conflict here.
+                    engine.session_naming.verify_native_metadata = False
                 renamed, total = engine.tick(
                     limit=1,
                     quiet=True,
