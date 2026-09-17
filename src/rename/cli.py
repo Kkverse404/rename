@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
+import time
 
 from . import __version__, service, util
 from . import config as config_mod
 from .adapters import CodexAdapter, all_adapters, get_adapters
+from .codex_hook import CodexHookInputError, read_stop_event
 from .daemon_lock import DaemonAlreadyRunningError, DaemonLock
 from .engine import Engine
 from .namers import NAMER_NAMES, get_namer
@@ -348,6 +351,58 @@ def cmd_status(args) -> int:
         avail = green("found") if adapter.available() else dim("not found")
         suffix = "" if adapter.name in enabled else dim("  [disabled in config]")
         print(f"    {adapter.label:<13} {avail}{suffix}")
+    return 0
+
+
+def cmd_codex_hook(_args) -> int:
+    """Handle one Codex Stop event without writing hook output to stdout."""
+
+    try:
+        event = read_stop_event(sys.stdin)
+    except CodexHookInputError:
+        return 0
+
+    log = util.log_path()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "a", encoding="utf-8", buffering=1) as log_file:
+        with contextlib.redirect_stdout(log_file), contextlib.redirect_stderr(log_file):
+            deadline = time.monotonic() + 300
+            while True:
+                lease = DaemonLock(util.daemon_lock_path())
+                try:
+                    lease.acquire()
+                    break
+                except DaemonAlreadyRunningError:
+                    if time.monotonic() >= deadline:
+                        util.log(
+                            f"Codex hook skipped {event.session_id}: naming lease timed out",
+                            level="warn",
+                        )
+                        return 0
+                    time.sleep(0.25)
+            try:
+                cfg = config_mod.load()
+                cfg.tools = ("codex",)
+                cfg.idle_seconds = 0
+                cfg.structured_naming.idle_seconds = 0
+                cfg.max_age_days = 36500
+                adapters, _namer, _state, engine = _build(cfg)
+                if not adapters:
+                    util.log("Codex hook skipped: Codex adapter is unavailable", level="warn")
+                    return 0
+                renamed, total = engine.tick(
+                    limit=1,
+                    quiet=True,
+                    session_filter={event.session_id},
+                )
+                util.log(
+                    f"Codex Stop hook processed {event.session_id}: "
+                    f"renamed={renamed}, candidates={total}"
+                )
+            except Exception as exc:
+                util.log(f"Codex Stop hook failed safely: {exc}", level="warn")
+            finally:
+                lease.release()
     return 0
 
 
@@ -870,6 +925,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     pu = sub.add_parser("uninstall", help="remove the background service")
     pu.set_defaults(func=cmd_uninstall)
+
+    ph = sub.add_parser("codex-hook", help=argparse.SUPPRESS)
+    ph.set_defaults(func=cmd_codex_hook)
 
     return p
 

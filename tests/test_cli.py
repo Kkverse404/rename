@@ -1,11 +1,57 @@
 import argparse
 import json
 import time
+import types
 
 from rename import cli
 from rename.config import Config
 from rename.models import Message, Session
 from rename.session_registry import SessionRegistry
+
+
+def test_codex_stop_hook_processes_only_current_session_without_output(
+    tmp_path, monkeypatch, capsys
+):
+    session_id = "thread-123"
+    engine = types.SimpleNamespace()
+    calls = []
+    engine.tick = lambda **kwargs: calls.append(kwargs) or (1, 1)
+    structured = types.SimpleNamespace(idle_seconds=300)
+    cfg = types.SimpleNamespace(
+        tools=(),
+        idle_seconds=300,
+        structured_naming=structured,
+        max_age_days=30,
+    )
+
+    class Lease:
+        def __init__(self, _path):
+            pass
+
+        def acquire(self):
+            return None
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(
+        cli, "read_stop_event", lambda _stream: types.SimpleNamespace(session_id=session_id)
+    )
+    monkeypatch.setattr(cli.config_mod, "load", lambda: cfg)
+    monkeypatch.setattr(cli, "_build", lambda _cfg: ([object()], None, None, engine))
+    monkeypatch.setattr(cli, "DaemonLock", Lease)
+    monkeypatch.setattr(cli.util, "log_path", lambda: tmp_path / "rename.log")
+    monkeypatch.setattr(cli.util, "daemon_lock_path", lambda: tmp_path / "daemon.lock")
+
+    assert cli.cmd_codex_hook(types.SimpleNamespace()) == 0
+
+    assert cfg.tools == ("codex",)
+    assert cfg.idle_seconds == 0
+    assert cfg.structured_naming.idle_seconds == 0
+    assert calls == [{"limit": 1, "quiet": True, "session_filter": {session_id}}]
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
 
 
 class FakeAdapter:

@@ -7,6 +7,8 @@ All notable changes to this project are documented here. Format loosely follows
 
 ### Added
 
+- A `rename codex-hook` entry point for asynchronous Codex `Stop` hooks that
+  names only the session supplied by the lifecycle event.
 - Opt-in Codex structured naming with machine-wide monotonic display IDs,
   validated compact `#ID- summary` titles, permanent human-edit protection,
   explicit reopen/rollback commands, and a recovery-safe registry.

@@ -15,6 +15,18 @@ state transitions, and operator commands are defined here.
 The default is `off`. Global `dry_run = true` has the same no-side-effect
 guarantee as `preview` for this workflow.
 
+## Codex lifecycle hook
+
+Codex can invoke a single-session naming pass from an asynchronous `Stop`
+hook. The hook command is `rename codex-hook`; it reads the Codex hook event
+from standard input, processes only that event's session ID, and emits no hook
+output. Configure it as a user-level hook when Codex is the only enabled
+adapter. Do not run the polling daemon at the same time.
+
+Codex requires non-managed hooks to be reviewed and trusted after they are
+added or changed. Inspect the effective hook in `/hooks` before disabling the
+polling daemon.
+
 ## Identity and title
 
 The permanent key is `(tool, native_session_id)`. `display_id` is a monotonic
