@@ -1,9 +1,16 @@
 import io
 import json
+import time
 
 import pytest
 
-from rename.codex_hook import CodexHookInputError, CodexStopEvent, read_stop_event
+from rename.codex_hook import (
+    CodexHookInputError,
+    CodexStopEvent,
+    read_stop_event,
+    resolve_stop_session,
+)
+from rename.models import Session
 
 
 def test_reads_codex_stop_event():
@@ -13,12 +20,68 @@ def test_reads_codex_stop_event():
                 "session_id": "thread-123",
                 "hook_event_name": "Stop",
                 "cwd": r"C:\work",
+                "transcript_path": r"C:\Users\me\.codex\sessions\thread-123.jsonl",
                 "last_assistant_message": "done",
             }
         )
     )
 
-    assert read_stop_event(stream) == CodexStopEvent(session_id="thread-123")
+    assert read_stop_event(stream) == CodexStopEvent(
+        session_id="thread-123",
+        cwd=r"C:\work",
+        transcript_path=r"C:\Users\me\.codex\sessions\thread-123.jsonl",
+    )
+
+
+def test_resolves_exact_native_session_id_first():
+    sessions = [
+        Session("codex", "thread-123", "Target", last_active=time.time()),
+        Session("codex", "other", "Other", last_active=time.time() + 1),
+    ]
+
+    resolved = resolve_stop_session(CodexStopEvent("thread-123"), sessions)
+
+    assert resolved is sessions[0]
+
+
+def test_resolves_desktop_execution_id_by_rollout_path():
+    sessions = [
+        Session(
+            "codex",
+            "thread-123",
+            "Target",
+            last_active=time.time(),
+            meta={"rollout_path": r"C:\Users\me\.codex\sessions\thread-123.jsonl"},
+        )
+    ]
+    event = CodexStopEvent(
+        "desktop-execution-id",
+        transcript_path=r"\\?\C:\Users\me\.codex\sessions\thread-123.jsonl",
+    )
+
+    assert resolve_stop_session(event, sessions) is sessions[0]
+
+
+def test_resolves_desktop_execution_id_to_latest_recent_session_in_same_cwd():
+    now = time.time()
+    sessions = [
+        Session("codex", "older", "Older", last_active=now - 120, cwd=r"D:\work"),
+        Session("codex", "latest", "Latest", last_active=now - 2, cwd=r"d:\WORK"),
+        Session("codex", "stale", "Stale", last_active=now - 900, cwd=r"D:\work"),
+    ]
+    event = CodexStopEvent("desktop-execution-id", cwd=r"\\?\D:\work")
+
+    assert resolve_stop_session(event, sessions, now=now).id == "latest"
+
+
+def test_does_not_guess_when_desktop_event_has_no_safe_match():
+    now = time.time()
+    sessions = [
+        Session("codex", "stale", "Stale", last_active=now - 900, cwd=r"D:\work")
+    ]
+    event = CodexStopEvent("desktop-execution-id", cwd=r"D:\elsewhere")
+
+    assert resolve_stop_session(event, sessions, now=now) is None
 
 
 @pytest.mark.parametrize(

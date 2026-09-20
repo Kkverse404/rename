@@ -19,9 +19,12 @@ guarantee as `preview` for this workflow.
 
 Codex can invoke a single-session naming pass from an asynchronous `Stop`
 hook. The hook command is `rename codex-hook`; it reads the Codex hook event
-from standard input, processes only that event's session ID, and emits no hook
-output. Configure it as a user-level hook when Codex is the only enabled
-adapter. Do not run the polling daemon at the same time.
+from standard input, resolves the event to its persisted sidebar thread, and
+processes only that thread without emitting hook output. Native thread IDs and
+exact transcript paths take precedence; a recent same-directory thread is the
+bounded fallback for desktop execution IDs. An event with no safe match is
+skipped. Configure the command as a user-level hook when Codex is the only
+enabled adapter. Do not run the polling daemon at the same time.
 
 Codex requires non-managed hooks to be reviewed and trusted after they are
 added or changed. Inspect the effective hook in `/hooks` before disabling the

@@ -13,6 +13,7 @@ def test_codex_stop_hook_processes_only_current_session_without_output(
     tmp_path, monkeypatch, capsys
 ):
     session_id = "thread-123"
+    session = Session("codex", session_id, "Target", last_active=time.time())
     session_naming = types.SimpleNamespace(verify_native_metadata=True)
     engine = types.SimpleNamespace(session_naming=session_naming)
     calls = []
@@ -39,7 +40,9 @@ def test_codex_stop_hook_processes_only_current_session_without_output(
         cli, "read_stop_event", lambda _stream: types.SimpleNamespace(session_id=session_id)
     )
     monkeypatch.setattr(cli.config_mod, "load", lambda: cfg)
-    monkeypatch.setattr(cli, "_build", lambda _cfg: ([object()], None, None, engine))
+    monkeypatch.setattr(
+        cli, "_build", lambda _cfg: ([FakeAdapter([session])], None, None, engine)
+    )
     monkeypatch.setattr(cli, "DaemonLock", Lease)
     monkeypatch.setattr(cli.util, "log_path", lambda: tmp_path / "rename.log")
     monkeypatch.setattr(cli.util, "daemon_lock_path", lambda: tmp_path / "daemon.lock")
@@ -54,6 +57,61 @@ def test_codex_stop_hook_processes_only_current_session_without_output(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
+
+
+def test_codex_stop_hook_maps_desktop_execution_id_before_processing(
+    tmp_path, monkeypatch
+):
+    thread_id = "thread-123"
+    rollout_path = tmp_path / "thread-123.jsonl"
+    session = Session(
+        "codex",
+        thread_id,
+        "Target",
+        last_active=time.time(),
+        meta={"rollout_path": str(rollout_path)},
+    )
+    event = types.SimpleNamespace(
+        session_id="desktop-execution-id",
+        cwd=str(tmp_path),
+        transcript_path=str(rollout_path),
+    )
+    engine = types.SimpleNamespace(
+        session_naming=types.SimpleNamespace(verify_native_metadata=True)
+    )
+    calls = []
+    engine.tick = lambda **kwargs: calls.append(kwargs) or (1, 1)
+    cfg = types.SimpleNamespace(
+        tools=(),
+        idle_seconds=300,
+        structured_naming=types.SimpleNamespace(idle_seconds=300),
+        max_age_days=30,
+    )
+
+    class Lease:
+        def __init__(self, _path):
+            pass
+
+        def acquire(self):
+            return None
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(cli, "read_stop_event", lambda _stream: event)
+    monkeypatch.setattr(cli.config_mod, "load", lambda: cfg)
+    monkeypatch.setattr(
+        cli, "_build", lambda _cfg: ([FakeAdapter([session])], None, None, engine)
+    )
+    monkeypatch.setattr(cli, "DaemonLock", Lease)
+    monkeypatch.setattr(cli.util, "log_path", lambda: tmp_path / "rename.log")
+    monkeypatch.setattr(cli.util, "daemon_lock_path", lambda: tmp_path / "daemon.lock")
+
+    assert cli.cmd_codex_hook(types.SimpleNamespace()) == 0
+
+    assert calls == [{"limit": 1, "quiet": True, "session_filter": {thread_id}}]
+    log = (tmp_path / "rename.log").read_text(encoding="utf-8")
+    assert "mapped desktop-execution-id to thread-123" in log
 
 
 class FakeAdapter:

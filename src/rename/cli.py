@@ -12,7 +12,7 @@ import time
 from . import __version__, service, util
 from . import config as config_mod
 from .adapters import CodexAdapter, all_adapters, get_adapters
-from .codex_hook import CodexHookInputError, read_stop_event
+from .codex_hook import CodexHookInputError, read_stop_event, resolve_stop_session
 from .daemon_lock import DaemonAlreadyRunningError, DaemonLock
 from .engine import Engine
 from .namers import NAMER_NAMES, get_namer
@@ -390,6 +390,19 @@ def cmd_codex_hook(_args) -> int:
                 if not adapters:
                     util.log("Codex hook skipped: Codex adapter is unavailable", level="warn")
                     return 0
+                sessions = adapters[0].discover(
+                    since=time.time() - cfg.max_age_days * 86_400
+                )
+                session = resolve_stop_session(event, sessions)
+                if session is None:
+                    util.log(
+                        f"Codex hook skipped {event.session_id}: "
+                        "no matching persisted thread",
+                        level="warn",
+                    )
+                    return 0
+                if session.id != event.session_id:
+                    util.log(f"Codex Stop hook mapped {event.session_id} to {session.id}")
                 if engine.session_naming is not None:
                     # A Stop event races the app-server's own status/updatedAt
                     # transition. The title compare-and-set remains authoritative;
@@ -398,10 +411,10 @@ def cmd_codex_hook(_args) -> int:
                 renamed, total = engine.tick(
                     limit=1,
                     quiet=True,
-                    session_filter={event.session_id},
+                    session_filter={session.id},
                 )
                 util.log(
-                    f"Codex Stop hook processed {event.session_id}: "
+                    f"Codex Stop hook processed {session.id}: "
                     f"renamed={renamed}, candidates={total}"
                 )
             except Exception as exc:

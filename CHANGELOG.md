@@ -30,6 +30,9 @@ All notable changes to this project are documented here. Format loosely follows
 
 ### Fixed
 
+- Desktop Codex `Stop` events now resolve their execution-session IDs to the
+  corresponding persisted sidebar thread before applying the single-thread
+  naming filter.
 - Native Codex `Stop` hooks now keep the title compare-and-set check while
   ignoring the event's transient `status` and `updatedAt` values, which change
   as Codex finishes a turn and previously caused false recovery conflicts.
