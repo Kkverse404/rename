@@ -161,6 +161,10 @@ def test_command_has_all_safety_flags_and_bounded_evidence(monkeypatch):
     assert "user-2" in prompt
     assert "置信度" in prompt
     assert "6-16 Chinese characters" in prompt
+    assert "verb-object task phrase" in prompt
+    assert "Never copy a conversational request as the summary" in prompt
+    assert "都用我们的比特浏览器测试一下" in prompt
+    assert "测试比特浏览器" in prompt
     assert "Omit project/module names" in prompt
     assert prompt not in argv
     assert seen["schema"]["additionalProperties"] is False

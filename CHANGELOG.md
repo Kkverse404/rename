@@ -30,6 +30,8 @@ All notable changes to this project are documented here. Format loosely follows
 
 ### Fixed
 
+- Structured titles now reject conversational request wording and ask the
+  classifier for a concise action-and-object task phrase.
 - Desktop Codex `Stop` events now resolve their execution-session IDs to the
   corresponding persisted sidebar thread before applying the single-thread
   naming filter.

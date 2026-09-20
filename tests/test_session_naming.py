@@ -257,6 +257,27 @@ def test_ready_requires_real_evidence_and_allowed_module(tmp_path):
     assert registry.get("codex", session.id).status == "pending"
 
 
+def test_conversational_summary_is_rejected_before_title_write(tmp_path):
+    workflow, registry, _classifier, writer = _workflow(
+        tmp_path,
+        decision=_ready(summary="都用我们的比特浏览器测试一下"),
+    )
+    session = _session()
+    workflow.prepare(session, time.time(), historical=False)
+
+    result = workflow.process(
+        session,
+        lambda _session: [Message("user", "都用我们的比特浏览器测试一下")],
+    )
+
+    record = registry.get("codex", session.id)
+    assert result.status == "pending"
+    assert result.reason == "summary contains conversational wording"
+    assert writer.writes == []
+    assert record is not None
+    assert record.decision["validation_error"] == result.reason
+
+
 def test_visible_title_omits_module_and_compacts_verbose_summary(tmp_path):
     workflow, registry, _classifier, _writer = _workflow(
         tmp_path,
@@ -275,7 +296,7 @@ def test_visible_title_omits_module_and_compacts_verbose_summary(tmp_path):
     record = registry.get("codex", session.id)
     assert result.title is not None and result.title.startswith("#1- ")
     assert "repo" not in result.title
-    assert len(result.title.removeprefix("#1- ")) <= 24
+    assert len(result.title.removeprefix("#1- ")) <= 16
     assert not result.title.endswith(tuple("，、:：;；.!！?？。"))
     assert record is not None and record.summary == result.title.removeprefix("#1- ")
 

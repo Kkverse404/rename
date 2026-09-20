@@ -29,8 +29,14 @@ from .session_registry import RegistryError, SessionRecord, SessionRegistry
 _READY_REASONS = {"explicit_goal", "context_converged"}
 _UNCLEAR_REASONS = {"ambiguous", "insufficient_context"}
 _PREFIX_RE = re.compile(r"^\s*#\d+-")
+_CONVERSATIONAL_SUMMARY_RE = re.compile(
+    r"(?:我们(?:的)?|咱们(?:的)?|帮我|帮忙|给我|麻烦|一下|能不能|可不可以|可以吗|"
+    r"请(?:帮|把|将|检查|修复|实现|添加|优化|测试|验证|排查|看看))"
+    r"|(?:\b(?:please|can you|could you|would you|my|our)\b)",
+    re.IGNORECASE,
+)
 _MAX_TITLE_CHARS = 120
-_MAX_CJK_SUMMARY_CHARS = 24
+_MAX_CJK_SUMMARY_CHARS = 16
 _MAX_NON_CJK_SUMMARY_CHARS = 64
 _MAX_NON_CJK_SUMMARY_WORDS = 8
 _TRAILING_TITLE_PUNCTUATION = " \t,，、:：;；.!！?？。"
@@ -130,6 +136,8 @@ def validate_naming_decision(
         return False, "summary is not one line"
     if _PREFIX_RE.match(summary):
         return False, "summary contains a managed title prefix"
+    if _CONVERSATIONAL_SUMMARY_RE.search(summary):
+        return False, "summary contains conversational wording"
     return True, None
 
 

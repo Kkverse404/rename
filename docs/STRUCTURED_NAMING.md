@@ -43,11 +43,12 @@ The program, not the model, formats the final title:
 #{display_id}- {summary}
 ```
 
-The summary is a compact, single-line task title and cannot contain a managed
-ID prefix. Chinese summaries are bounded to 24 characters; other languages are
-bounded to eight words and 64 characters. Trailing title punctuation is
-removed. The validated classifier module remains internal registry metadata
-and is never included in the visible title.
+The summary is a compact, single-line task phrase and cannot contain a managed
+ID prefix or conversational wording. It keeps the task action and key object
+instead of repeating the user's request. Chinese summaries are bounded to 16
+characters; other languages are bounded to eight words and 64 characters.
+Trailing title punctuation is removed. The validated classifier module remains
+internal registry metadata and is never included in the visible title.
 
 Codex stores two distinct values: an explicit app-server `thread.name` and a
 generated `title`/`preview` fallback. List, search, status, and the GUI display
