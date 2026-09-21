@@ -188,6 +188,8 @@ def _build_prompt(transcript: str, modules: tuple[str, ...]) -> str:
         "\u6d4b\u8bd5\u6bd4\u7279\u6d4f\u89c8\u5668. Omit project/module names, "
         "completion status, procedure, justification, conjunctions that add secondary details, "
         "and trailing punctuation. "
+        "A completed explicit request still counts as ready; classify the task that was just "
+        "completed instead of returning insufficient_context. "
         "reason_code explicit_goal or context_converged. When unclear, set ready false, "
         "module and summary to null, and use ambiguous or insufficient_context. "
         "Evidence must contain only IDs of user messages that directly support the decision.\n"

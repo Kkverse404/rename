@@ -88,6 +88,19 @@ def test_codex_stop_hook_maps_desktop_execution_id_before_processing(
         max_age_days=30,
     )
 
+    class EventuallyConsistentAdapter(FakeAdapter):
+        def __init__(self, sessions):
+            super().__init__(sessions)
+            self.discover_calls = 0
+
+        def discover(self, since):
+            self.discover_calls += 1
+            if self.discover_calls == 1:
+                return []
+            return super().discover(since)
+
+    adapter = EventuallyConsistentAdapter([session])
+
     class Lease:
         def __init__(self, _path):
             pass
@@ -101,8 +114,9 @@ def test_codex_stop_hook_maps_desktop_execution_id_before_processing(
     monkeypatch.setattr(cli, "read_stop_event", lambda _stream: event)
     monkeypatch.setattr(cli.config_mod, "load", lambda: cfg)
     monkeypatch.setattr(
-        cli, "_build", lambda _cfg: ([FakeAdapter([session])], None, None, engine)
+        cli, "_build", lambda _cfg: ([adapter], None, None, engine)
     )
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(cli, "DaemonLock", Lease)
     monkeypatch.setattr(cli.util, "log_path", lambda: tmp_path / "rename.log")
     monkeypatch.setattr(cli.util, "daemon_lock_path", lambda: tmp_path / "daemon.lock")
@@ -110,6 +124,7 @@ def test_codex_stop_hook_maps_desktop_execution_id_before_processing(
     assert cli.cmd_codex_hook(types.SimpleNamespace()) == 0
 
     assert calls == [{"limit": 1, "quiet": True, "session_filter": {thread_id}}]
+    assert adapter.discover_calls == 2
     log = (tmp_path / "rename.log").read_text(encoding="utf-8")
     assert "mapped desktop-execution-id to thread-123" in log
 

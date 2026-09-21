@@ -21,6 +21,9 @@ from .session_naming import SessionNamingWorkflow
 from .session_registry import RegistryError, SessionRecord, SessionRegistry
 from .state import StateStore
 
+_CODEX_HOOK_DISCOVERY_ATTEMPTS = 8
+_CODEX_HOOK_DISCOVERY_RETRY_SECONDS = 0.25
+
 
 # --------------------------------------------------------------------------- #
 # tiny tty helpers (no dependencies)
@@ -390,10 +393,15 @@ def cmd_codex_hook(_args) -> int:
                 if not adapters:
                     util.log("Codex hook skipped: Codex adapter is unavailable", level="warn")
                     return 0
-                sessions = adapters[0].discover(
-                    since=time.time() - cfg.max_age_days * 86_400
-                )
-                session = resolve_stop_session(event, sessions)
+                since = time.time() - cfg.max_age_days * 86_400
+                session = None
+                for attempt in range(_CODEX_HOOK_DISCOVERY_ATTEMPTS):
+                    sessions = adapters[0].discover(since=since)
+                    session = resolve_stop_session(event, sessions)
+                    if session is not None:
+                        break
+                    if attempt + 1 < _CODEX_HOOK_DISCOVERY_ATTEMPTS:
+                        time.sleep(_CODEX_HOOK_DISCOVERY_RETRY_SECONDS)
                 if session is None:
                     util.log(
                         f"Codex hook skipped {event.session_id}: "

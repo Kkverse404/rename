@@ -21,10 +21,13 @@ Codex can invoke a single-session naming pass from an asynchronous `Stop`
 hook. The hook command is `rename codex-hook`; it reads the Codex hook event
 from standard input, resolves the event to its persisted sidebar thread, and
 processes only that thread without emitting hook output. Native thread IDs and
-exact transcript paths take precedence; a recent same-directory thread is the
-bounded fallback for desktop execution IDs. An event with no safe match is
-skipped. Configure the command as a user-level hook when Codex is the only
-enabled adapter. Do not run the polling daemon at the same time.
+exact transcript paths take precedence. Desktop execution IDs can also match a
+thread created at the same time; a recent thread in the same directory or one
+of its parent directories is the bounded fallback. Discovery briefly retries
+while the desktop app projects a new thread into persistent state. An event
+with no safe match is skipped. Configure the command as a user-level hook when
+Codex is the only enabled adapter. Do not run the polling daemon at the same
+time.
 
 Codex requires non-managed hooks to be reviewed and trusted after they are
 added or changed. Inspect the effective hook in `/hooks` before disabling the
@@ -81,6 +84,9 @@ state transition, or write permission.
 Ambiguous or insufficient input stays cached until the conversation changes.
 Classifier execution failures use a separate five-minute retry backoff, so a
 temporarily unavailable executable can recover without another user message.
+If the classifier reports insufficient context but Codex already provides a
+compact, non-conversational generated title, that title is used as the bounded
+summary fallback. Ambiguous conversations still remain pending.
 
 ## State transitions
 

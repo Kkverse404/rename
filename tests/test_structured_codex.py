@@ -163,6 +163,7 @@ def test_command_has_all_safety_flags_and_bounded_evidence(monkeypatch):
     assert "6-16 Chinese characters" in prompt
     assert "verb-object task phrase" in prompt
     assert "Never copy a conversational request as the summary" in prompt
+    assert "A completed explicit request still counts as ready" in prompt
     assert "都用我们的比特浏览器测试一下" in prompt
     assert "测试比特浏览器" in prompt
     assert "Omit project/module names" in prompt

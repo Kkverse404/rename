@@ -151,6 +151,21 @@ def _compact_summary(summary: str) -> str:
     return normalized.rstrip(_TRAILING_TITLE_PUNCTUATION)
 
 
+def _codex_title_fallback(title: str | None) -> str | None:
+    if not isinstance(title, str):
+        return None
+    title = title.strip()
+    if (
+        not title
+        or "\n" in title
+        or "\r" in title
+        or _PREFIX_RE.match(title)
+        or _CONVERSATIONAL_SUMMARY_RE.search(title)
+    ):
+        return None
+    return _compact_summary(title) or None
+
+
 def _format_title(display_id: int, summary: str) -> tuple[str, str]:
     normalized = _compact_summary(summary)
     prefix = f"#{display_id}- "
@@ -650,24 +665,37 @@ class SessionNamingWorkflow:
         if validation_error:
             data["validation_error"] = validation_error
         if not ready:
-            self.registry.record_unclear(
-                session.tool,
-                session.id,
-                decision=data,
-                input_sig=input_sig,
-                last_evaluated_active=session.last_active,
+            fallback_summary = (
+                _codex_title_fallback(session.title)
+                if validation_error is None
+                and decision.reason_code == "insufficient_context"
+                else None
             )
-            reason = validation_error or f"task is {decision.reason_code}"
-            return WorkflowResult(
-                True,
-                display_id=record.display_id,
-                status="pending",
-                reason=reason,
-            )
+            if fallback_summary is None or not modules:
+                self.registry.record_unclear(
+                    session.tool,
+                    session.id,
+                    decision=data,
+                    input_sig=input_sig,
+                    last_evaluated_active=session.last_active,
+                )
+                reason = validation_error or f"task is {decision.reason_code}"
+                return WorkflowResult(
+                    True,
+                    display_id=record.display_id,
+                    status="pending",
+                    reason=reason,
+                )
+            module = modules[0]
+            summary_source = fallback_summary
+            data["fallback_source"] = "codex_title"
+        else:
+            assert decision.module is not None and decision.summary is not None
+            module = decision.module
+            summary_source = decision.summary
 
-        assert decision.module is not None and decision.summary is not None
         try:
-            desired, summary = _format_title(record.display_id, decision.summary)
+            desired, summary = _format_title(record.display_id, summary_source)
         except ValueError as exc:
             data["validation_error"] = str(exc)
             self.registry.record_unclear(
@@ -689,7 +717,7 @@ class SessionNamingWorkflow:
             expected=session.native_title,
             original=session.title,
             desired=desired,
-            module=decision.module,
+            module=module,
             summary=summary,
             decision=data,
             input_sig=input_sig,

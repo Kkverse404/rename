@@ -74,6 +74,41 @@ def test_resolves_desktop_execution_id_to_latest_recent_session_in_same_cwd():
     assert resolve_stop_session(event, sessions, now=now).id == "latest"
 
 
+def test_resolves_desktop_execution_id_by_nearby_uuid_creation_time():
+    thread_id = "01a0c1b3-93ce-7c30-b912-82becee00ca8"
+    event = CodexStopEvent("01a0c1b3-97bf-7672-aaef-9eb57bf6c0f6")
+    sessions = [
+        Session(
+            "codex",
+            thread_id,
+            "Target",
+            last_active=time.time(),
+            meta={"created_at_ms": int(thread_id.replace("-", "")[:12], 16)},
+        )
+    ]
+
+    assert resolve_stop_session(event, sessions) is sessions[0]
+
+
+def test_resolves_latest_recent_session_when_hook_runs_in_project_subdirectory():
+    now = time.time()
+    sessions = [
+        Session(
+            "codex",
+            "thread-123",
+            "Target",
+            last_active=now - 2,
+            cwd=r"D:\codexpg\project",
+        )
+    ]
+    event = CodexStopEvent(
+        "desktop-execution-id",
+        cwd=r"D:\codexpg\project\src",
+    )
+
+    assert resolve_stop_session(event, sessions, now=now) is sessions[0]
+
+
 def test_does_not_guess_when_desktop_event_has_no_safe_match():
     now = time.time()
     sessions = [

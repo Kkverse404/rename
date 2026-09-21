@@ -216,6 +216,35 @@ def test_unclear_decision_is_cached_without_write(tmp_path):
     assert registry.get("codex", session.id).decision["reason_code"] == "ambiguous"
 
 
+def test_insufficient_context_uses_clean_codex_fallback_title(tmp_path):
+    unclear = _ready(
+        ready=False,
+        module=None,
+        summary=None,
+        reason_code="insufficient_context",
+        evidence_message_ids=[],
+        confidence=0.98,
+    )
+    writer = FakeWriter(title=None)
+    workflow, registry, _classifier, _writer = _workflow(
+        tmp_path,
+        decision=unclear,
+        writer=writer,
+    )
+    session = _session(title="配置飞书CLI查询公开云文档")
+    session.meta["native_name"] = None
+    workflow.prepare(session, time.time(), historical=False)
+
+    result = workflow.process(session, lambda _session: [Message("user", "直接从cli搜索呢")])
+
+    record = registry.get("codex", session.id)
+    assert result.renamed
+    assert result.title == "#1- 配置飞书CLI查询公开云文档"
+    assert writer.writes == [(session.id, result.title, None)]
+    assert record is not None and record.status == "finalized"
+    assert record.decision["fallback_source"] == "codex_title"
+
+
 def test_classifier_failure_retries_after_backoff_without_new_activity(tmp_path):
     workflow, registry, classifier, writer = _workflow(tmp_path)
     classifier.error = ClassifierUnavailableError("Codex executable was not found")
